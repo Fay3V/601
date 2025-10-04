@@ -1,1 +1,0 @@
-mod sm_course;

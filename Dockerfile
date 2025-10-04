@@ -12,6 +12,7 @@ COPY 601.sources.list /etc/apt/sources.list.d
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
+    unzip \
     wget \
     libssl-dev \
     libbz2-dev \
@@ -41,12 +42,7 @@ COPY patches /tmp/patches
 
 RUN wget https://www.python.org/ftp/python/2.6.6/Python-2.6.6.tgz && tar -xzf Python-2.6.6.tgz
 
-
-# RUN ln -s /lib/x86_64-linux-gnu/libz.so.1 /lib/libz.so
-#
-
 WORKDIR /tmp/Python-2.6.6
-
 
 RUN cp /tmp/patches/010_ssl_no_ssl2_no_ssl3.patch . && \
     cp /tmp/patches/002_readline63.patch . && \
@@ -61,6 +57,10 @@ RUN cp /tmp/patches/010_ssl_no_ssl2_no_ssl3.patch . && \
 
 ENV PATH="/usr/local/python2.6/bin:$PATH"
 
+RUN wget https://files.pythonhosted.org/packages/source/s/setuptools/setuptools-36.8.0.zip && \
+    unzip setuptools-36.8.0.zip && \
+    cd setuptools-36.8.0 && \
+    python2.6 setup.py install
 
 RUN cd /tmp && \
     wget https://github.com/numpy/numpy/archive/refs/tags/v1.8.2.tar.gz && \
@@ -69,7 +69,17 @@ RUN cd /tmp && \
     python2.6 setup.py build && \
     python2.6 setup.py install
 
-    # wget https://github.com/numpy/numpy/releases/download/v1.8.2/numpy-1.8.2.tar.gz && \
+RUN wget https://files.pythonhosted.org/packages/source/p/pycparser/pycparser-2.14.tar.gz && \
+    tar -xzf pycparser-2.14.tar.gz && \
+    cd pycparser-2.14 && \
+    python2.6 setup.py install
+
+RUN wget https://files.pythonhosted.org/packages/source/c/cffi/cffi-1.11.5.tar.gz && \
+    tar -xzf cffi-1.11.5.tar.gz && \
+    cd cffi-1.11.5 && \
+    python2.6 setup.py build && \
+    python2.6 setup.py install 
+ 
 # Copy your tar.gz into the container
 COPY lab/afbbebccae39bfa42f9d071e9ed10453_lib601-3-500.tar.gz /tmp/lib601-3-500.tar.gz
 
@@ -84,3 +94,4 @@ WORKDIR /course
 
 # Set default command
 CMD [ "bash" ]
+

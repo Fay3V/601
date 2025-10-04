@@ -1,6 +1,14 @@
 [package]
-name = "rust"
+name = "sm"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
+safer-ffi = { path = "/home/adiallo/wks/rust/safer_ffi"}
+
+[features]
+default = []
+headers = ["safer-ffi/headers", "safer-ffi/python-headers"]
