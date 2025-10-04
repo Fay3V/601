@@ -1,13 +1,17 @@
 use crate::sm::StateMachine;
 use core::fmt;
-struct Incr<const STEP: i32>;
 
+struct Incr<const STEP: i32>;
 impl<const STEP: i32> StateMachine<i32> for Incr<STEP> {
     type State = ();
     type Output = i32;
 
-    fn next_values(&self, _state: Self::State, input: i32) -> (Self::State, Self::Output) {
-        ((), input + STEP)
+    fn next_values(
+        &self,
+        _state: Self::State,
+        input: Option<i32>,
+    ) -> (Self::State, Option<Self::Output>) {
+        ((), input.map(|input| input + STEP))
     }
 
     fn start_state(&self) -> Self::State {
@@ -26,17 +30,22 @@ impl<I> Delay<I> {
 }
 
 impl<I: Clone + fmt::Debug> StateMachine<I> for Delay<I> {
-    type State = I;
+    type State = Option<I>;
     type Output = I;
 
-    fn next_values(&self, state: Self::State, input: I) -> (Self::State, Self::Output) {
+    fn next_values(
+        &self,
+        state: Self::State,
+        input: Option<I>,
+    ) -> (Self::State, Option<Self::Output>) {
         (input, state)
     }
 
     fn start_state(&self) -> Self::State {
-        self.val.clone()
+        Some(self.val.clone())
     }
 }
+
 #[test]
 fn it_works() {
     struct Delay2<I> {
@@ -51,15 +60,19 @@ fn it_works() {
     }
 
     impl<I: Clone + fmt::Debug> StateMachine<I> for Delay2<I> {
-        type State = (I, I);
+        type State = (Option<I>, Option<I>);
         type Output = I;
 
-        fn next_values(&self, state: Self::State, input: I) -> (Self::State, Self::Output) {
+        fn next_values(
+            &self,
+            state: Self::State,
+            input: Option<I>,
+        ) -> (Self::State, Option<Self::Output>) {
             ((state.1, input), state.0)
         }
 
         fn start_state(&self) -> Self::State {
-            (self.val0.clone(), self.val1.clone())
+            (Some(self.val0.clone()), Some(self.val1.clone()))
         }
     }
 
@@ -97,9 +110,17 @@ fn test_accumulator() {
         type State = i32;
         type Output = i32;
 
-        fn next_values(&self, state: Self::State, input: i32) -> (Self::State, Self::Output) {
-            let acc = state + input;
-            (acc, acc)
+        fn next_values(
+            &self,
+            state: Self::State,
+            input: Option<i32>,
+        ) -> (Self::State, Option<Self::Output>) {
+            if let Some(input) = input {
+                let acc = state + input;
+                (acc, Some(acc))
+            } else {
+                (state, None)
+            }
         }
 
         fn start_state(&self) -> Self::State {
@@ -129,21 +150,29 @@ fn test_abc() {
         type State = AbcState;
         type Output = bool;
 
-        fn next_values(&self, state: Self::State, input: char) -> (Self::State, Self::Output) {
-            let (next_state, condition) = match state {
-                AbcState::ReadA => (AbcState::ReadB, input == 'a'),
-                AbcState::ReadB => (AbcState::ReadC, input == 'b'),
-                AbcState::ReadC => (AbcState::ReadA, input == 'c'),
-                AbcState::Stop => (AbcState::Stop, false),
-            };
-            (
-                if condition {
-                    next_state
-                } else {
-                    AbcState::Stop
-                },
-                condition,
-            )
+        fn next_values(
+            &self,
+            state: Self::State,
+            input: Option<char>,
+        ) -> (Self::State, Option<Self::Output>) {
+            if let Some(input) = input {
+                let (next_state, condition) = match state {
+                    AbcState::ReadA => (AbcState::ReadB, input == 'a'),
+                    AbcState::ReadB => (AbcState::ReadC, input == 'b'),
+                    AbcState::ReadC => (AbcState::ReadA, input == 'c'),
+                    AbcState::Stop => (AbcState::Stop, false),
+                };
+                (
+                    if condition {
+                        next_state
+                    } else {
+                        AbcState::Stop
+                    },
+                    Some(condition),
+                )
+            } else {
+                (AbcState::Stop, None)
+            }
         }
 
         fn start_state(&self) -> Self::State {
@@ -167,15 +196,26 @@ fn test_average2() {
     struct Average2;
 
     impl StateMachine<i32> for Average2 {
-        type State = i32;
+        type State = Option<i32>;
         type Output = f32;
 
-        fn next_values(&self, state: Self::State, input: i32) -> (Self::State, Self::Output) {
-            (input, (state as f32 + input as f32) / 2.0)
+        fn next_values(
+            &self,
+            state: Self::State,
+            input: Option<i32>,
+        ) -> (Self::State, Option<Self::Output>) {
+            let output = if let Some(state) = state
+                && let Some(input) = input
+            {
+                Some((state as f32 + input as f32) / 2.0)
+            } else {
+                None
+            };
+            (input, output)
         }
 
         fn start_state(&self) -> Self::State {
-            0
+            Some(0)
         }
     }
     assert_eq!(

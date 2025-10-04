@@ -5,9 +5,13 @@ pub trait StateMachine<Input: Clone> {
     type Output;
 
     fn start_state(&self) -> Self::State;
-    fn next_values(&self, state: Self::State, input: Input) -> (Self::State, Self::Output);
+    fn next_values(
+        &self,
+        state: Self::State,
+        input: Option<Input>,
+    ) -> (Self::State, Option<Self::Output>);
 
-    fn step(&mut self, state: &mut Self::State, input: Input) -> Self::Output {
+    fn step(&mut self, state: &mut Self::State, input: Option<Input>) -> Option<Self::Output> {
         let (new_state, output) = self.next_values(state.clone(), input);
         *state = new_state;
         output
@@ -17,7 +21,7 @@ pub trait StateMachine<Input: Clone> {
         inputs
             .into_iter()
             .scan(self.start_state(), |current_state, input| {
-                Some(self.step(current_state, input))
+                self.step(current_state, Some(input))
             })
             .collect()
     }
@@ -77,10 +81,18 @@ where
         (self.machine1.start_state(), self.machine2.start_state())
     }
 
-    fn next_values(&self, state: Self::State, input: I) -> (Self::State, Self::Output) {
+    fn next_values(
+        &self,
+        state: Self::State,
+        input: Option<I>,
+    ) -> (Self::State, Option<Self::Output>) {
         let (new_state1, output1) = self.machine1.next_values(state.0, input.clone());
         let (new_state2, output2) = self.machine2.next_values(state.1, input);
-        ((new_state1, new_state2), output1 + output2)
+        let new_state = (new_state1, new_state2);
+        match (output1, output2) {
+            (None, None) | (None, Some(_)) | (Some(_), None) => (new_state, None),
+            (Some(o1), Some(o2)) => (new_state, Some(o1 + o2)),
+        }
     }
 }
 
@@ -102,10 +114,18 @@ where
         (self.machine1.start_state(), self.machine2.start_state())
     }
 
-    fn next_values(&self, state: Self::State, input: I) -> (Self::State, Self::Output) {
+    fn next_values(
+        &self,
+        state: Self::State,
+        input: Option<I>,
+    ) -> (Self::State, Option<Self::Output>) {
         let (new_state1, output1) = self.machine1.next_values(state.0, input.clone());
         let (new_state2, output2) = self.machine2.next_values(state.1, input);
-        ((new_state1, new_state2), (output1, output2))
+        let new_state = (new_state1, new_state2);
+        match (output1, output2) {
+            (None, None) | (None, Some(_)) | (Some(_), None) => (new_state, None),
+            (Some(o1), Some(o2)) => (new_state, Some((o1, o2))),
+        }
     }
 }
 
@@ -131,7 +151,11 @@ where
         )
     }
 
-    fn next_values(&self, state: Self::State, input: I1) -> (Self::State, Self::Output) {
+    fn next_values(
+        &self,
+        state: Self::State,
+        input: Option<I1>,
+    ) -> (Self::State, Option<Self::Output>) {
         let (new_state1, output1) = self.first_machine.next_values(state.0, input);
         let (new_state2, output2) = self.second_machine.next_values(state.1, output1);
         ((new_state1, new_state2), output2)
