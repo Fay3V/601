@@ -1,3 +1,4 @@
+use crate::sm::StateFullMachine;
 use crate::sm::StateMachine;
 use core::fmt;
 use std::{
@@ -5,15 +6,15 @@ use std::{
     ops::{Add, Mul},
 };
 
-pub struct Incr<const STEP: i32>;
-impl<const STEP: i32> StateMachine<i32> for Incr<STEP> {
+pub struct Incr<const STEP: i64>;
+impl<const STEP: i64> StateMachine<i64> for Incr<STEP> {
     type State = ();
-    type Output = i32;
+    type Output = i64;
 
     fn next_values(
         &self,
         _state: Self::State,
-        input: Option<i32>,
+        input: Option<i64>,
     ) -> (Self::State, Option<Self::Output>) {
         ((), input.map(|input| input + STEP))
     }
@@ -108,17 +109,17 @@ where
 }
 
 #[derive(Default)]
-pub struct Constant<const VAL: i32>;
-impl<const VAL: i32> StateMachine<i32> for Constant<VAL> {
+pub struct Constant<const VAL: i64>;
+impl<const VAL: i64> StateMachine<i64> for Constant<VAL> {
     type State = ();
-    type Output = i32;
+    type Output = i64;
 
     fn next_values(
         &self,
         _state: Self::State,
-        input: Option<i32>,
+        _input: Option<i64>,
     ) -> (Self::State, Option<Self::Output>) {
-        ((), input.map(|_input| VAL))
+        ((), Some(VAL))
     }
 
     fn start_state(&self) -> Self::State {
@@ -126,27 +127,36 @@ impl<const VAL: i32> StateMachine<i32> for Constant<VAL> {
     }
 }
 
-pub type Wire = Gain<i32, 1>;
-
 #[derive(Default)]
-pub struct Gain<I, const G: i32 = 1> {
+pub struct Gain<I, G> {
+    gain: G,
     _phantom: PhantomData<I>,
 }
 
-impl<I, const G: i32> StateMachine<I> for Gain<I, G>
+impl<I, G> Gain<I, G> {
+    pub fn new(gain: G) -> Self {
+        Self {
+            gain,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<I, G> StateMachine<I> for Gain<I, G>
 where
     I: Clone,
-    I: Mul<i32>,
+    G: Clone,
+    I: Mul<G>,
 {
     type State = ();
-    type Output = <I as Mul<i32>>::Output;
+    type Output = <I as Mul<G>>::Output;
 
     fn next_values(
         &self,
         _state: Self::State,
         input: Option<I>,
     ) -> (Self::State, Option<Self::Output>) {
-        ((), input.map(|input| input * G))
+        ((), input.map(|input| input * self.gain.clone()))
     }
 
     fn start_state(&self) -> Self::State {
@@ -187,24 +197,28 @@ fn it_works() {
     assert_eq!(
         &[100, 10, 1, 0, 2, 0, 0, 3, 0, 0],
         Delay2::new(100, 10)
+            .into_state_full()
             .transduce([1, 0, 2, 0, 0, 3, 0, 0, 0, 4])
             .as_slice()
     );
     assert_eq!(
         &[10, 100, 0, 0, 0, 0, 0],
         Delay2::new(10, 100)
+            .into_state_full()
             .transduce([0, 0, 0, 0, 0, 0, 1])
             .as_slice()
     );
     assert_eq!(
         &[-1, 0, 1, 2, -3, 1],
         Delay2::new(-1, 0)
+            .into_state_full()
             .transduce([1, 2, -3, 1, 2, -3])
             .as_slice()
     );
     assert_eq!(
         &['a', 'b', 'c', 'd', 'e', 'f', 'g'],
         Delay2::new('a', 'b')
+            .into_state_full()
             .transduce(['c', 'd', 'e', 'f', 'g', 'i', 'j'])
             .as_slice()
     );
@@ -238,7 +252,9 @@ fn test_accumulator() {
 
     assert_eq!(
         &[1, 1, 3, 3, 3, 6, 6, 6, 6, 10],
-        Acc.transduce([1, 0, 2, 0, 0, 3, 0, 0, 0, 4]).as_slice()
+        Acc.into_state_full()
+            .transduce([1, 0, 2, 0, 0, 3, 0, 0, 0, 4])
+            .as_slice()
     );
 }
 
@@ -290,11 +306,12 @@ fn test_abc() {
 
     assert_eq!(
         &[true, false, false],
-        Abc.transduce(['a', 'a', 'a']).as_slice()
+        Abc.into_state_full().transduce(['a', 'a', 'a']).as_slice()
     );
     assert_eq!(
         &[true, true, true, true, false, false, false],
-        Abc.transduce(['a', 'b', 'c', 'a', 'c', 'b', 'a'])
+        Abc.into_state_full()
+            .transduce(['a', 'b', 'c', 'a', 'c', 'b', 'a'])
             .as_slice()
     );
 }
@@ -328,7 +345,10 @@ fn test_average2() {
     }
     assert_eq!(
         &[5.0, 7.5, 3.5, 6.0],
-        Average2.transduce([10, 5, 2, 10]).as_slice()
+        Average2
+            .into_state_full()
+            .transduce([10, 5, 2, 10])
+            .as_slice()
     );
 }
 
@@ -338,6 +358,7 @@ fn test_cascade() {
         &[100, 10, 1, 0, 2, 0, 0, 3, 0, 0],
         Delay::new(10)
             .cascade(Delay::new(100))
+            .into_state_full()
             .transduce([1, 0, 2, 0, 0, 3, 0, 0, 0, 4])
             .as_slice()
     );
@@ -345,6 +366,7 @@ fn test_cascade() {
         &[10, 100, 0, 0, 0, 0, 0],
         Delay::new(100)
             .cascade(Delay::new(10))
+            .into_state_full()
             .transduce([0, 0, 0, 0, 0, 0, 1])
             .as_slice()
     );
@@ -352,6 +374,7 @@ fn test_cascade() {
         &[-1, 0, 1, 2, -3, 1],
         Delay::new(0)
             .cascade(Delay::new(-1))
+            .into_state_full()
             .transduce([1, 2, -3, 1, 2, -3])
             .as_slice()
     );
@@ -359,6 +382,7 @@ fn test_cascade() {
         &['a', 'b', 'c', 'd', 'e', 'f', 'g'],
         Delay::new('b')
             .cascade(Delay::new('a'))
+            .into_state_full()
             .transduce(['c', 'd', 'e', 'f', 'g', 'i', 'j'])
             .as_slice()
     );
@@ -369,6 +393,7 @@ fn test_parallel_x() {
     assert_eq!(
         &[2, 1, 3, 1, 1, 4, 1, 1, 1, 5],
         Incr::<1>
+            .into_state_full()
             .transduce([1, 0, 2, 0, 0, 3, 0, 0, 0, 4])
             .as_slice()
     );
@@ -388,6 +413,7 @@ fn test_parallel_x() {
         ],
         Incr::<1>
             .parallel(Incr::<2>)
+            .into_state_full()
             .transduce([1, 0, 2, 0, 0, 3, 0, 0, 0, 4])
             .as_slice()
     );
@@ -396,6 +422,7 @@ fn test_parallel_x() {
         Incr::<1>
             .parallel(Incr::<2>)
             .cascade(Adder::default())
+            .into_state_full()
             .transduce([1, 0, 2, 0, 0, 3, 0, 0, 0, 4])
             .as_slice()
     );
@@ -408,7 +435,8 @@ fn test_feedback() {
         Incr::<1>
             .cascade(Delay::new(0))
             .feedback()
-            .transduce(std::iter::repeat(0).take(10))
+            .into_state_full()
+            .run(10)
             .as_slice()
     );
 }
@@ -418,6 +446,7 @@ fn test_adder() {
     assert_eq!(
         &[4, 2, 0, -1],
         Adder::default()
+            .into_state_full()
             .transduce([(1, 3), (0, 2), (0, 0), (3, -4)])
             .as_slice()
     );
@@ -431,18 +460,20 @@ fn test_fibo() {
             .parallel(Delay::new(1).cascade(Delay::default()))
             .cascade(Adder::default())
             .feedback()
-            .transduce(std::iter::repeat(0).take(10))
+            .into_state_full()
+            .run(10)
             .as_slice()
     );
 
     assert_eq!(
         &[1, 2, 3, 5, 8, 13, 21, 34, 55, 89],
         Delay::new(1)
-            .parallel(Wire::default())
+            .parallel(Gain::new(1))
             .cascade(Adder::default())
             .cascade(Delay::new(1))
             .feedback()
-            .transduce(std::iter::repeat(0).take(10))
+            .into_state_full()
+            .run(10)
             .as_slice()
     );
 }
@@ -452,11 +483,12 @@ fn test_double() {
     assert_eq!(
         &[1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024],
         Constant::<2>::default()
-            .parallel(Wire::default())
+            .parallel(Gain::new(1))
             .cascade(Multiplier::default())
             .cascade(Delay::new(1))
             .feedback()
-            .transduce(std::iter::repeat(0).take(11))
+            .into_state_full()
+            .run(11)
             .as_slice()
     );
 
@@ -464,7 +496,8 @@ fn test_double() {
         &[1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024],
         Constant::<2>::default()
             .cascade(Multiplier::default().cascade(Delay::new(1)).feedback2())
-            .transduce(std::iter::repeat(0).take(11))
+            .into_state_full()
+            .run(11)
             .as_slice()
     );
 }
@@ -474,18 +507,20 @@ fn test_feedback_op() {
     assert_eq!(
         &[0, 0, 1, 3, 6, 10, 15, 21, 28, 36],
         Delay::new(0)
-            .feedbackOp(Gain::<i32>::default(), |i1, i2| i1 + i2)
+            .feedback_op(Gain::new(1), |i1, i2| i1 + i2)
+            .into_state_full()
             .transduce(0..10)
             .as_slice()
     );
 
-    let fac = Delay::new(1).feedbackOp(Wire::default(), |i1, i2| i1 * i2);
+    let fac = Delay::new(1).feedback_op(Gain::new(1), |i1, i2| i1 * i2);
     // let counter = Incr::<1>.cascade(Delay::new(1)).feedback();
-    let counter = Delay::new(1).feedbackOp(Wire::default(), |i1, i2| i1 + i2);
+    let counter = Delay::new(1).feedback_op(Gain::new(1), |i1, i2| i1 + i2);
     assert_eq!(
         &[1, 1, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800],
         counter
             .cascade(fac)
+            .into_state_full()
             .transduce(std::iter::repeat(1).take(11))
             .as_slice()
     );

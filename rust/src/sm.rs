@@ -1,5 +1,56 @@
 use std::marker::PhantomData;
 
+pub trait StateFullMachine<I, O> {
+    fn reset(&mut self);
+    fn step(&mut self, input: Option<I>) -> Option<O>;
+
+    fn transduce<'a, II: IntoIterator<Item = I>>(&'a mut self, inputs: II) -> Vec<O>
+    where
+        Self: Sized,
+    {
+        self.reset();
+        inputs
+            .into_iter()
+            .map_while(|input| self.step(Some(input)))
+            .collect()
+    }
+
+    fn run(&mut self, n: usize) -> Vec<O> {
+        self.reset();
+        (0..n).map_while(|_input| self.step(None)).collect()
+    }
+}
+
+pub struct StateFull<I, O, SM>(SM::State, SM)
+where
+    I: Clone,
+    SM: StateMachine<I, Output = O>;
+
+impl<I, O, SM> StateFullMachine<I, O> for StateFull<I, O, SM>
+where
+    I: Clone,
+    SM: StateMachine<I, Output = O>,
+    SM::State: Clone,
+{
+    fn reset(&mut self) {
+        self.0 = self.1.start_state();
+    }
+
+    fn step(&mut self, input: Option<I>) -> Option<O> {
+        let (new_state, output) = self.1.next_values(self.0.clone(), input);
+        self.0 = new_state;
+        output
+    }
+}
+
+impl<I, O, SM> StateFull<I, O, SM>
+where
+    I: Clone,
+    SM: StateMachine<I, Output = O>,
+    SM::State: Clone,
+{
+}
+
 pub trait StateMachine<Input: Clone> {
     type State: Clone;
     type Output;
@@ -11,26 +62,11 @@ pub trait StateMachine<Input: Clone> {
         input: Option<Input>,
     ) -> (Self::State, Option<Self::Output>);
 
-    fn step(&mut self, state: &mut Self::State, input: Option<Input>) -> Option<Self::Output> {
-        let (new_state, output) = self.next_values(state.clone(), input);
-        *state = new_state;
-        output
-    }
-
-    fn start<'a>(&'a mut self) -> impl FnMut(Input) -> Option<Self::Output>
-    where
-        Self: Sized,
-        <Self as StateMachine<Input>>::State: 'a,
-    {
-        let mut current_state = self.start_state();
-        move |input| self.step(&mut current_state, Some(input))
-    }
-
-    fn transduce<'a, I: IntoIterator<Item = Input>>(&'a mut self, inputs: I) -> Vec<Self::Output>
+    fn into_state_full(self) -> StateFull<Input, Self::Output, Self>
     where
         Self: Sized,
     {
-        inputs.into_iter().map_while(self.start()).collect()
+        StateFull(self.start_state(), self)
     }
 
     fn cascade<I2, SM2>(self, next_machine: SM2) -> Cascade<Self, SM2>
@@ -86,7 +122,7 @@ pub trait StateMachine<Input: Clone> {
         }
     }
 
-    fn feedbackOp<SM, Op>(self, machine: SM, op: Op) -> FeedbackOp<Self, SM, Op, Input>
+    fn feedback_op<SM, Op>(self, machine: SM, op: Op) -> FeedbackOp<Self, SM, Op, Input>
     where
         Self: Sized,
     {

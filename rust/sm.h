@@ -7,17 +7,36 @@
  *                                         *
  *******************************************/
 
-typedef ... StateFullMachineOpaque_t;
+typedef ... StateFullMachineOpaque_f64_f64_t;
 
-StateFullMachineOpaque_t *
-sm_new (void);
+StateFullMachineOpaque_f64_f64_t *
+sm_counter (void);
+
+StateFullMachineOpaque_f64_f64_t *
+sm_factorial (void);
 
 void
 sm_reset (
-    StateFullMachineOpaque_t * sm);
+    StateFullMachineOpaque_f64_f64_t * sm);
 
-int32_t
+typedef struct Vec_double {
+    double * ptr;
+
+    size_t len;
+
+    size_t cap;
+} Vec_double_t;
+
+Vec_double_t
+sm_run (
+    StateFullMachineOpaque_f64_f64_t * sm,
+    size_t n);
+
+double
 sm_step (
-    StateFullMachineOpaque_t * sm,
-    int32_t input);
+    StateFullMachineOpaque_f64_f64_t * sm,
+    double input);
+
+StateFullMachineOpaque_f64_f64_t *
+sm_world (void);
 
