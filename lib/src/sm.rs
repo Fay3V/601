@@ -1,8 +1,15 @@
 use std::marker::PhantomData;
 
+#[derive(Clone)]
+pub enum Either<L, R> {
+    Left(L),
+    Rigth(R),
+}
+
 pub trait StateFullMachine<I, O> {
     fn reset(&mut self);
     fn step(&mut self, input: Option<I>) -> Option<O>;
+    fn is_done(&self) -> bool;
 
     fn transduce<'a, II: IntoIterator<Item = I>>(&'a mut self, inputs: II) -> Vec<O>
     where
@@ -11,13 +18,27 @@ pub trait StateFullMachine<I, O> {
         self.reset();
         inputs
             .into_iter()
-            .map_while(|input| self.step(Some(input)))
+            .map_while(|input| {
+                if self.is_done() {
+                    None
+                } else {
+                    self.step(Some(input))
+                }
+            })
             .collect()
     }
 
     fn run(&mut self, n: usize) -> Vec<O> {
         self.reset();
-        (0..n).map_while(|_input| self.step(None)).collect()
+        (0..n)
+            .map_while(|_input| {
+                if self.is_done() {
+                    None
+                } else {
+                    self.step(None)
+                }
+            })
+            .collect()
     }
 }
 
@@ -26,9 +47,11 @@ where
     F: FnMut(I) -> O,
 {
     fn reset(&mut self) {}
-
     fn step(&mut self, input: Option<I>) -> Option<O> {
         input.map(|input| self(input))
+    }
+    fn is_done(&self) -> bool {
+        false
     }
 }
 
@@ -52,6 +75,10 @@ where
         self.0 = new_state;
         output
     }
+
+    fn is_done(&self) -> bool {
+        self.1.done(self.0.clone())
+    }
 }
 
 impl<I, O, SM> StateFull<I, O, SM>
@@ -72,6 +99,10 @@ pub trait StateMachine<Input: Clone> {
         state: Self::State,
         input: Option<Input>,
     ) -> (Self::State, Option<Self::Output>);
+
+    fn done(&self, _state: Self::State) -> bool {
+        false
+    }
 
     fn into_state_full(self) -> StateFull<Input, Self::Output, Self>
     where
@@ -144,8 +175,169 @@ pub trait StateMachine<Input: Clone> {
             _phantom: PhantomData,
         }
     }
+
+    fn switch<SM, P>(self, machine: SM, pred: P) -> Switch<Self, SM, P>
+    where
+        Self: Sized,
+    {
+        Switch {
+            first_machine: self,
+            second_machine: machine,
+            pred,
+        }
+    }
+
+    fn mux<SM, P>(self, machine: SM, pred: P) -> Mux<Self, SM, P>
+    where
+        Self: Sized,
+    {
+        Mux {
+            first_machine: self,
+            second_machine: machine,
+            pred,
+        }
+    }
+
+    fn r#if<SM, P>(self, machine: SM, pred: P) -> If<Self, SM, P>
+    where
+        Self: Sized,
+    {
+        If {
+            first_machine: self,
+            second_machine: machine,
+            pred,
+        }
+    }
 }
 
+pub struct If<SM1, SM2, P> {
+    first_machine: SM1,
+    second_machine: SM2,
+    pred: P,
+}
+
+impl<I, SM1, SM2, P> StateMachine<I> for If<SM1, SM2, P>
+where
+    I: Clone,
+    P: Fn(I) -> bool,
+    SM1: StateMachine<I>,
+    SM2: StateMachine<I, Output = SM1::Output>,
+{
+    type State = Option<Either<SM1::State, SM2::State>>;
+    type Output = SM1::Output;
+
+    fn start_state(&self) -> Self::State {
+        None
+    }
+
+    fn next_values(
+        &self,
+        state: Self::State,
+        input: Option<I>,
+    ) -> (Self::State, Option<Self::Output>) {
+        let state = match state {
+            Some(state) => state,
+            None => {
+                if let Some(true) = input.clone().map(|input| (self.pred)(input)) {
+                    Either::Left(self.first_machine.start_state())
+                } else {
+                    Either::Rigth(self.second_machine.start_state())
+                }
+            }
+        };
+
+        match state {
+            Either::Left(s1) => {
+                let (new_s1, out) = self.first_machine.next_values(s1, input.clone());
+                (Some(Either::Left(new_s1)), out)
+            }
+            Either::Rigth(s2) => {
+                let (new_s2, out) = self.second_machine.next_values(s2, input.clone());
+                (Some(Either::Rigth(new_s2)), out)
+            }
+        }
+    }
+}
+
+pub struct Mux<SM1, SM2, P> {
+    first_machine: SM1,
+    second_machine: SM2,
+    pred: P,
+}
+
+impl<I, SM1, SM2, P> StateMachine<I> for Mux<SM1, SM2, P>
+where
+    I: Clone,
+    P: Fn(I) -> bool,
+    SM1: StateMachine<I>,
+    SM2: StateMachine<I, Output = SM1::Output>,
+{
+    type State = (SM1::State, SM2::State);
+    type Output = SM1::Output;
+
+    fn start_state(&self) -> Self::State {
+        (
+            self.first_machine.start_state(),
+            self.second_machine.start_state(),
+        )
+    }
+
+    fn next_values(
+        &self,
+        state: Self::State,
+        input: Option<I>,
+    ) -> (Self::State, Option<Self::Output>) {
+        let (s1, s2) = state;
+        let (new_s1, out1) = self.first_machine.next_values(s1, input.clone());
+        let (new_s2, out2) = self.second_machine.next_values(s2, input.clone());
+        (
+            (new_s1, new_s2),
+            if let Some(true) = input.map(|input| (self.pred)(input)) {
+                out1
+            } else {
+                out2
+            },
+        )
+    }
+}
+pub struct Switch<SM1, SM2, P> {
+    first_machine: SM1,
+    second_machine: SM2,
+    pred: P,
+}
+
+impl<I, SM1, SM2, P> StateMachine<I> for Switch<SM1, SM2, P>
+where
+    I: Clone,
+    P: Fn(I) -> bool,
+    SM1: StateMachine<I>,
+    SM2: StateMachine<I, Output = SM1::Output>,
+{
+    type State = (SM1::State, SM2::State);
+    type Output = SM1::Output;
+
+    fn start_state(&self) -> Self::State {
+        (
+            self.first_machine.start_state(),
+            self.second_machine.start_state(),
+        )
+    }
+
+    fn next_values(
+        &self,
+        state: Self::State,
+        input: Option<I>,
+    ) -> (Self::State, Option<Self::Output>) {
+        let (s1, s2) = state;
+        if let Some(true) = input.clone().map(|input| (self.pred)(input)) {
+            let (new_s1, out) = self.first_machine.next_values(s1, input);
+            ((new_s1, s2), out)
+        } else {
+            let (new_s2, out) = self.second_machine.next_values(s2, input);
+            ((s1, new_s2), out)
+        }
+    }
+}
 pub struct FeedbackOp<SM1, SM2, Op, I> {
     first_machine: SM1,
     second_machine: SM2,

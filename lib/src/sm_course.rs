@@ -164,6 +164,37 @@ where
     }
 }
 
+#[derive(Default)]
+struct Acc<I> {
+    _phantom: PhantomData<I>,
+}
+
+impl<I> StateMachine<I> for Acc<I>
+where
+    I: Clone + Default,
+    I: Add<I, Output = I>,
+{
+    type State = I;
+    type Output = I;
+
+    fn next_values(
+        &self,
+        state: Self::State,
+        input: Option<I>,
+    ) -> (Self::State, Option<Self::Output>) {
+        if let Some(input) = input {
+            let acc = state + input;
+            let out = Some(acc.clone());
+            (acc, out)
+        } else {
+            (state, None)
+        }
+    }
+
+    fn start_state(&self) -> Self::State {
+        I::default()
+    }
+}
 #[test]
 fn it_works() {
     struct Delay2<I> {
@@ -226,33 +257,10 @@ fn it_works() {
 
 #[test]
 fn test_accumulator() {
-    struct Acc;
-
-    impl StateMachine<i32> for Acc {
-        type State = i32;
-        type Output = i32;
-
-        fn next_values(
-            &self,
-            state: Self::State,
-            input: Option<i32>,
-        ) -> (Self::State, Option<Self::Output>) {
-            if let Some(input) = input {
-                let acc = state + input;
-                (acc, Some(acc))
-            } else {
-                (state, None)
-            }
-        }
-
-        fn start_state(&self) -> Self::State {
-            0
-        }
-    }
-
     assert_eq!(
         &[1, 1, 3, 3, 3, 6, 6, 6, 6, 10],
-        Acc.into_state_full()
+        Acc::default()
+            .into_state_full()
             .transduce([1, 0, 2, 0, 0, 3, 0, 0, 0, 4])
             .as_slice()
     );
@@ -523,5 +531,127 @@ fn test_feedback_op() {
             .into_state_full()
             .transduce(std::iter::repeat(1).take(11))
             .as_slice()
+    );
+}
+
+#[test]
+fn test_switch() {
+    assert_eq!(
+        &[0, 3, 4, 9, 8, 15, 12, 21, 16, 27],
+        Gain::new(2)
+            .switch(Gain::new(3), |i| i % 2 == 0)
+            .into_state_full()
+            .transduce(0..10)
+            .as_slice()
+    );
+}
+
+#[test]
+fn test_mux() {
+    assert_eq!(
+        &[0, 3, 4, 9, 8, 15, 12, 21, 16, 27],
+        Gain::new(2)
+            .mux(Gain::new(3), |i| i % 2 == 0)
+            .into_state_full()
+            .transduce(0..10)
+            .as_slice()
+    );
+}
+
+#[test]
+fn test_mux_vs_switch() {
+    assert_eq!(
+        &[2, 5, 9, 200, 500, 900, 10, 12, 15],
+        Acc::default()
+            .switch(Acc::default(), |i| i > 100)
+            .into_state_full()
+            .transduce([2, 3, 4, 200, 300, 400, 1, 2, 3])
+            .as_slice()
+    );
+
+    assert_eq!(
+        &[2, 5, 9, 209, 509, 909, 910, 912, 915],
+        Acc::default()
+            .mux(Acc::default(), |i| i > 100)
+            .into_state_full()
+            .transduce([2, 3, 4, 200, 300, 400, 1, 2, 3])
+            .as_slice()
+    );
+}
+
+#[test]
+fn test_if() {
+    assert_eq!(
+        &[0, 2, 4, 6, 8, 10, 12, 14, 16, 18],
+        Gain::new(2)
+            .r#if(Gain::new(3), |i| i % 2 == 0)
+            .into_state_full()
+            .transduce(0..10)
+            .as_slice()
+    );
+    assert_eq!(
+        &[0, 3, 6, 9, 12, 15, 18, 21, 24, 27],
+        Gain::new(2)
+            .r#if(Gain::new(3), |i| i % 2 != 0)
+            .into_state_full()
+            .transduce(0..10)
+            .as_slice()
+    );
+}
+
+#[test]
+fn test_consume_five() {
+    struct ConsumeFive;
+    impl StateMachine<i32> for ConsumeFive {
+        type State = (i32, i32);
+        type Output = Option<i32>;
+
+        fn start_state(&self) -> Self::State {
+            (0, 0)
+        }
+
+        fn done(&self, state: Self::State) -> bool {
+            state.0 == 5
+        }
+
+        fn next_values(
+            &self,
+            state: Self::State,
+            input: Option<i32>,
+        ) -> (Self::State, Option<Self::Output>) {
+            let input = input.unwrap();
+            match state.0 {
+                s if s < 4 => ((state.0 + 1, state.1 + input), Some(None)),
+                4 => {
+                    let out = state.1 + input;
+                    ((state.0 + 1, out), Some(Some(out)))
+                }
+                _ => ((state.0, state.1), Some(Some(state.1))),
+            }
+        }
+    }
+
+    let mut sm = ConsumeFive.into_state_full();
+    assert_eq!(sm.step(Some(1)), Some(None));
+    assert_eq!(sm.is_done(), false);
+
+    assert_eq!(sm.step(Some(1)), Some(None));
+    assert_eq!(sm.is_done(), false);
+
+    assert_eq!(sm.step(Some(1)), Some(None));
+    assert_eq!(sm.is_done(), false);
+
+    assert_eq!(sm.step(Some(1)), Some(None));
+    assert_eq!(sm.is_done(), false);
+
+    assert_eq!(sm.step(Some(1)), Some(Some(5)));
+    assert_eq!(sm.is_done(), true);
+
+    assert_eq!(sm.step(Some(1)), Some(Some(5)));
+    assert_eq!(sm.is_done(), true);
+
+    assert_eq!(
+        &[None, None, None, None, Some(15)],
+        ConsumeFive.into_state_full().transduce(1..10).as_slice()
     );
 }
