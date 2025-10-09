@@ -9,6 +9,10 @@
 
 typedef ... StateFullMachineOpaque_SensorInput_Action_t;
 
+bool
+sm_is_done (
+    StateFullMachineOpaque_SensorInput_Action_t * sm);
+
 void
 sm_reset (
     StateFullMachineOpaque_SensorInput_Action_t * sm);
@@ -33,7 +37,8 @@ sm_run (
     size_t n);
 
 StateFullMachineOpaque_SensorInput_Action_t *
-sm_simple (void);
+sm_simple (
+    double heading_delta);
 
 typedef struct {
     double idx[8];

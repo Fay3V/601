@@ -4,9 +4,14 @@ use crate::{
 };
 use rand::Rng;
 use safer_ffi::prelude::*;
-use std::ops::{Add, Mul};
+use std::{
+    cell::Cell,
+    f64::{self, consts::PI},
+    ops::{Add, Mul},
+};
 pub mod sm;
 pub mod sm_course;
+pub mod util;
 
 #[derive_ReprC]
 #[repr(opaque)]
@@ -18,105 +23,9 @@ where
     sfm: Box<dyn StateFullMachine<I, O>>,
 }
 
-// #[ffi_export]
-// fn sm_world() -> repr_c::Box<StateFullMachineOpaque<f64, f64>> {
-//     const K: f64 = -1.5;
-//     const D: f64 = 1.0;
-
-//     struct WallController;
-//     impl StateMachine<f64> for WallController {
-//         type State = ();
-//         type Output = f64;
-
-//         fn start_state(&self) -> Self::State {
-//             ()
-//         }
-
-//         fn next_values(
-//             &self,
-//             _state: Self::State,
-//             input: Option<f64>,
-//         ) -> (Self::State, Option<Self::Output>) {
-//             ((), input.map(|i| K * (D - i)))
-//         }
-//     }
-
-//     const DELTA: f64 = 0.1;
-//     struct WallWorld;
-//     impl StateMachine<f64> for WallWorld {
-//         type State = Option<f64>;
-//         type Output = f64;
-
-//         fn start_state(&self) -> Self::State {
-//             Some(5.0)
-//         }
-
-//         fn next_values(
-//             &self,
-//             state: Self::State,
-//             input: Option<f64>,
-//         ) -> (Self::State, Option<Self::Output>) {
-//             (
-//                 input.zip(state).map(|(input, state)| state - DELTA * input),
-//                 state,
-//             )
-//         }
-//     }
-
-//     Box::new(StateFullMachineOpaque {
-//         sfm: Box::new(
-//             WallController
-//                 .cascade(WallWorld)
-//                 .feedback()
-//                 .into_state_full(),
-//         ),
-//     })
-//     .into()
-// }
-
-// #[ffi_export]
-// fn sm_factorial() -> repr_c::Box<StateFullMachineOpaque<f64, f64>> {
-//     let fac = Delay::new(1.0).feedback_op(Gain::new(1.0), f64::mul);
-//     let counter = Delay::new(1.0).feedback_op(Gain::new(1.0), f64::add);
-//     Box::new(StateFullMachineOpaque {
-//         sfm: Box::new(counter.cascade(fac).into_state_full()),
-//     })
-//     .into()
-// }
-
-// #[ffi_export]
-// fn sm_counter() -> repr_c::Box<StateFullMachineOpaque<f64, f64>> {
-//     Box::new(StateFullMachineOpaque {
-//         sfm: Box::new(
-//             Delay::new(1.0)
-//                 .feedback_op(Gain::new(1.0), f64::add)
-//                 .into_state_full(),
-//         ),
-//     })
-//     .into()
-// }
-
-// #[ffi_export]
-// fn sm_step(sm: &'_ mut StateFullMachineOpaque<f64, f64>, input: f64) -> f64 {
-//     sm.sfm
-//         .step(Some(input))
-//         .expect("cannot step the state machine")
-// }
-//
-// #[ffi_export]
-// fn sm_run(sm: &'_ mut StateFullMachineOpaque<f64, f64>, n: usize) -> repr_c::Vec<f64> {
-//     sm.sfm.run(n).into()
-// }
-//
-// #[ffi_export]
-// fn sm_reset(sm: &'_ mut StateFullMachineOpaque<f64, f64>) {
-//     sm.sfm.reset()
-// }
-//
-//
 #[derive_ReprC]
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Pose {
     x: f64,
     y: f64,
@@ -125,7 +34,7 @@ struct Pose {
 
 #[derive_ReprC]
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct SensorInput {
     sonars: [f64; 8],
     odometry: Pose,
@@ -134,26 +43,64 @@ struct SensorInput {
 
 #[derive_ReprC]
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Action {
     fvel: f64,
     rvel: f64,
     // voltage: f64,
 }
 
-#[ffi_export]
-fn sm_simple() -> repr_c::Box<StateFullMachineOpaque<SensorInput, Action>> {
-    let mut rng = rand::rng();
+struct Rotate {
+    heading_delta: f64,
+    rotation_gain: f64,
+    angle_epsilon: f64,
+}
 
+impl StateMachine<SensorInput> for Rotate {
+    type State = Option<(f64, f64)>;
+    type Output = Action;
+
+    fn start_state(&self) -> Self::State {
+        None
+    }
+
+    fn done(&self, state: Self::State) -> bool {
+        state
+            .map(|(theta_acc, _)| (self.heading_delta - theta_acc).abs() < self.angle_epsilon)
+            .unwrap_or(false)
+    }
+
+    fn next_values(
+        &self,
+        state: Self::State,
+        input: Option<SensorInput>,
+    ) -> (Self::State, Option<Self::Output>) {
+        let input = input.expect("input value");
+        let curr_theta = input.odometry.theta;
+        let theta_acc = state
+            .map(|(theta_acc, theta_last)| {
+                theta_acc + util::fix_angle_plus_minus_pi(curr_theta - theta_last)
+            })
+            .unwrap_or(0.0);
+        let action = Action {
+            fvel: 0.0,
+            rvel: self.rotation_gain * (self.heading_delta - theta_acc),
+        };
+        (Some((theta_acc, curr_theta)), Some(action))
+    }
+}
+
+#[ffi_export]
+fn sm_simple(heading_delta: f64) -> repr_c::Box<StateFullMachineOpaque<SensorInput, Action>> {
     Box::new(StateFullMachineOpaque {
-        sfm: Box::new(move |sensor| {
-            let action = Action {
-                fvel: rng.random(),
-                rvel: rng.random(),
-            };
-            println!("{sensor:?} => {action:?}");
-            action
-        }),
+        sfm: Box::new(
+            Rotate {
+                heading_delta,
+                rotation_gain: 0.5,
+                angle_epsilon: 0.01,
+            }
+            .into_state_full(),
+        ),
     })
     .into()
 }
@@ -170,7 +117,12 @@ fn sm_run(
     sm: &'_ mut StateFullMachineOpaque<SensorInput, Action>,
     n: usize,
 ) -> repr_c::Vec<Action> {
-    sm.sfm.run(n).into()
+    sm.sfm.run(Some(n)).into()
+}
+
+#[ffi_export]
+fn sm_is_done(sm: &'_ mut StateFullMachineOpaque<SensorInput, Action>) -> bool {
+    sm.sfm.is_done()
 }
 
 #[ffi_export]

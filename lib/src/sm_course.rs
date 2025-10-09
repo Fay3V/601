@@ -444,7 +444,7 @@ fn test_feedback() {
             .cascade(Delay::new(0))
             .feedback()
             .into_state_full()
-            .run(10)
+            .run(Some(10))
             .as_slice()
     );
 }
@@ -469,7 +469,7 @@ fn test_fibo() {
             .cascade(Adder::default())
             .feedback()
             .into_state_full()
-            .run(10)
+            .run(Some(10))
             .as_slice()
     );
 
@@ -481,7 +481,7 @@ fn test_fibo() {
             .cascade(Delay::new(1))
             .feedback()
             .into_state_full()
-            .run(10)
+            .run(Some(10))
             .as_slice()
     );
 }
@@ -496,7 +496,7 @@ fn test_double() {
             .cascade(Delay::new(1))
             .feedback()
             .into_state_full()
-            .run(11)
+            .run(Some(11))
             .as_slice()
     );
 
@@ -505,7 +505,7 @@ fn test_double() {
         Constant::<2>::default()
             .cascade(Multiplier::default().cascade(Delay::new(1)).feedback2())
             .into_state_full()
-            .run(11)
+            .run(Some(11))
             .as_slice()
     );
 }
@@ -599,38 +599,37 @@ fn test_if() {
     );
 }
 
-#[test]
-fn test_consume_five() {
-    struct ConsumeFive;
-    impl StateMachine<i32> for ConsumeFive {
-        type State = (i32, i32);
-        type Output = Option<i32>;
+struct ConsumeFive;
+impl StateMachine<i32> for ConsumeFive {
+    type State = (i32, i32);
+    type Output = Option<i32>;
 
-        fn start_state(&self) -> Self::State {
-            (0, 0)
-        }
-
-        fn done(&self, state: Self::State) -> bool {
-            state.0 == 5
-        }
-
-        fn next_values(
-            &self,
-            state: Self::State,
-            input: Option<i32>,
-        ) -> (Self::State, Option<Self::Output>) {
-            let input = input.unwrap();
-            match state.0 {
-                s if s < 4 => ((state.0 + 1, state.1 + input), Some(None)),
-                4 => {
-                    let out = state.1 + input;
-                    ((state.0 + 1, out), Some(Some(out)))
-                }
-                _ => ((state.0, state.1), Some(Some(state.1))),
-            }
-        }
+    fn start_state(&self) -> Self::State {
+        (0, 0)
     }
 
+    fn done(&self, state: Self::State) -> bool {
+        state.0 == 5
+    }
+
+    fn next_values(
+        &self,
+        state: Self::State,
+        input: Option<i32>,
+    ) -> (Self::State, Option<Self::Output>) {
+        let input = input.unwrap();
+        match state.0 {
+            s if s < 4 => ((state.0 + 1, state.1 + input), Some(None)),
+            4 => {
+                let out = state.1 + input;
+                ((state.0 + 1, out), Some(Some(out)))
+            }
+            _ => ((state.0, state.1), Some(Some(state.1))),
+        }
+    }
+}
+#[test]
+fn test_consume_five() {
     let mut sm = ConsumeFive.into_state_full();
     assert_eq!(sm.step(Some(1)), Some(None));
     assert_eq!(sm.is_done(), false);
@@ -653,5 +652,153 @@ fn test_consume_five() {
     assert_eq!(
         &[None, None, None, None, Some(15)],
         ConsumeFive.into_state_full().transduce(1..10).as_slice()
+    );
+}
+
+struct CharTSM(char);
+
+impl StateMachine<char> for CharTSM {
+    type State = bool;
+    type Output = char;
+
+    fn start_state(&self) -> Self::State {
+        false
+    }
+
+    fn done(&self, state: Self::State) -> bool {
+        state
+    }
+
+    fn next_values(
+        &self,
+        _state: Self::State,
+        _input: Option<char>,
+    ) -> (Self::State, Option<Self::Output>) {
+        (true, Some(self.0))
+    }
+}
+
+#[test]
+fn test_repeat() {
+    assert_eq!(&['a'], CharTSM('a').into_state_full().run(None).as_slice());
+    assert_eq!(
+        &['a', 'a', 'a', 'a'],
+        CharTSM('a')
+            .repeat(Some(4))
+            .into_state_full()
+            .run(Some(10))
+            .as_slice()
+    )
+}
+
+#[test]
+fn test_repeat_until() {
+    assert_eq!(
+        &[
+            None,
+            None,
+            None,
+            None,
+            Some(10),
+            None,
+            None,
+            None,
+            None,
+            Some(35),
+            None,
+            None,
+            None,
+            None,
+            Some(60)
+        ],
+        ConsumeFive
+            .repeat_until(|i| i > 10)
+            .into_state_full()
+            .transduce(0..20)
+            .as_slice()
+    );
+}
+
+#[test]
+fn test_until() {
+    assert_eq!(
+        &[None, None, None, None, Some(10),],
+        ConsumeFive
+            .until(|i| i > 10)
+            .into_state_full()
+            .transduce(0..20)
+            .as_slice()
+    );
+    assert_eq!(
+        &[None, None, None],
+        ConsumeFive
+            .until(|i| i == 2)
+            .into_state_full()
+            .transduce(0..20)
+            .as_slice()
+    );
+    assert_eq!(
+        [
+            None,
+            None,
+            None,
+            None,
+            Some(10),
+            None,
+            None,
+            None,
+            None,
+            Some(35),
+            None,
+            None
+        ],
+        ConsumeFive
+            .repeat(None)
+            .until(|i| i > 10)
+            .into_state_full()
+            .transduce(0..20)
+            .as_slice()
+    );
+}
+
+#[test]
+fn test_seq() {
+    assert_eq!(
+        &['a', 'b', 'c'],
+        CharTSM('a')
+            .seq(CharTSM('b'))
+            .seq(CharTSM('c'))
+            .into_state_full()
+            .run(None)
+            .as_slice()
+    );
+
+    assert_eq!(
+        &['a', 'b', 'c'],
+        crate::seq!(CharTSM('a'), CharTSM('b'), CharTSM('c'))
+            .into_state_full()
+            .run(None)
+            .as_slice()
+    );
+
+    macro_rules! make_text_sequence {
+    ($first:expr $(, $rest:expr)+ $(,)?) => {{
+        $crate::seq!(
+        CharTSM($first)
+            $(
+                ,CharTSM($rest)
+            )+
+        )
+    }};
+}
+    assert_eq!(
+        [
+            'h', 'e', 'l', 'l', 'o', 'h', 'e', 'l', 'l', 'o', 'h', 'e', 'l', 'l', 'o'
+        ],
+        make_text_sequence!('h', 'e', 'l', 'l', 'o')
+            .repeat(Some(3))
+            .into_state_full()
+            .run(None)
+            .as_slice()
     );
 }

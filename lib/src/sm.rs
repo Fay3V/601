@@ -28,17 +28,22 @@ pub trait StateFullMachine<I, O> {
             .collect()
     }
 
-    fn run(&mut self, n: usize) -> Vec<O> {
+    fn run(&mut self, n: Option<usize>) -> Vec<O> {
         self.reset();
-        (0..n)
-            .map_while(|_input| {
-                if self.is_done() {
-                    None
-                } else {
-                    self.step(None)
-                }
-            })
-            .collect()
+
+        let cb = |_| {
+            if self.is_done() {
+                None
+            } else {
+                self.step(None)
+            }
+        };
+
+        if let Some(n) = n {
+            (0..n).map_while(cb).collect()
+        } else {
+            (0..).map_while(cb).collect()
+        }
     }
 }
 
@@ -64,7 +69,7 @@ impl<I, O, SM> StateFullMachine<I, O> for StateFull<I, O, SM>
 where
     I: Clone,
     SM: StateMachine<I, Output = O>,
-    SM::State: Clone,
+    SM::State: Clone + core::fmt::Debug,
 {
     fn reset(&mut self) {
         self.0 = self.1.start_state();
@@ -207,6 +212,218 @@ pub trait StateMachine<Input: Clone> {
             second_machine: machine,
             pred,
         }
+    }
+
+    fn seq<SM>(self, machine: SM) -> Seq<Self, SM>
+    where
+        Self: Sized,
+    {
+        Seq {
+            first_machine: self,
+            second_machine: machine,
+        }
+    }
+
+    fn repeat(self, n: Option<usize>) -> Repeat<Self>
+    where
+        Self: Sized,
+    {
+        Repeat { machine: self, n }
+    }
+
+    fn repeat_until<P>(self, pred: P) -> RepeatUntil<Self, P>
+    where
+        Self: Sized,
+    {
+        RepeatUntil {
+            machine: self,
+            pred,
+        }
+    }
+
+    fn until<P>(self, pred: P) -> Until<Self, P>
+    where
+        Self: Sized,
+    {
+        Until {
+            machine: self,
+            pred,
+        }
+    }
+}
+
+pub struct Until<SM, P> {
+    machine: SM,
+    pred: P,
+}
+
+impl<I, SM, P> StateMachine<I> for Until<SM, P>
+where
+    I: Clone,
+    SM: StateMachine<I>,
+    P: Fn(I) -> bool,
+{
+    type State = (SM::State, bool);
+    type Output = SM::Output;
+
+    fn start_state(&self) -> Self::State {
+        (self.machine.start_state(), false)
+    }
+
+    fn done(&self, state: Self::State) -> bool {
+        let (state, done) = state;
+        self.machine.done(state) || done
+    }
+
+    fn next_values(
+        &self,
+        state: Self::State,
+        input: Option<I>,
+    ) -> (Self::State, Option<Self::Output>) {
+        let (state, _) = state;
+        let done = input
+            .clone()
+            .map(|input| (self.pred)(input))
+            .unwrap_or(false);
+        let (new_s, out) = self.machine.next_values(state, input.clone());
+        ((new_s, done), out)
+    }
+}
+
+pub struct RepeatUntil<SM, P> {
+    machine: SM,
+    pred: P,
+}
+
+impl<I, SM, P> StateMachine<I> for RepeatUntil<SM, P>
+where
+    I: Clone,
+    SM: StateMachine<I>,
+    P: Fn(I) -> bool,
+{
+    type State = (SM::State, bool);
+    type Output = SM::Output;
+
+    fn start_state(&self) -> Self::State {
+        (self.machine.start_state(), false)
+    }
+
+    fn done(&self, state: Self::State) -> bool {
+        let (state, done) = state;
+        self.machine.done(state) && done
+    }
+
+    fn next_values(
+        &self,
+        state: Self::State,
+        input: Option<I>,
+    ) -> (Self::State, Option<Self::Output>) {
+        let (state, _) = state;
+        let done = input
+            .clone()
+            .map(|input| (self.pred)(input))
+            .unwrap_or(false);
+        let (mut new_s, out) = self.machine.next_values(state, input.clone());
+        if self.machine.done(new_s.clone()) && !done {
+            new_s = self.machine.start_state();
+        }
+        ((new_s, done), out)
+    }
+}
+
+pub struct Repeat<SM> {
+    machine: SM,
+    n: Option<usize>,
+}
+
+impl<I, SM> StateMachine<I> for Repeat<SM>
+where
+    I: Clone,
+    SM: StateMachine<I>,
+{
+    type State = (usize, SM::State);
+    type Output = SM::Output;
+
+    fn start_state(&self) -> Self::State {
+        (0, self.machine.start_state())
+    }
+
+    fn done(&self, state: Self::State) -> bool {
+        self.n == Some(state.0)
+    }
+
+    fn next_values(
+        &self,
+        state: Self::State,
+        input: Option<I>,
+    ) -> (Self::State, Option<Self::Output>) {
+        let (mut n, state) = state;
+        let (mut new_s, out) = self.machine.next_values(state, input);
+        if self.machine.done(new_s.clone()) && Some(n) != self.n {
+            new_s = self.machine.start_state();
+            n += 1;
+        }
+        ((n, new_s), out)
+    }
+}
+
+#[macro_export]
+macro_rules! seq {
+($first:expr $(, $rest:expr)+ $(,)?) => {{
+    $first
+        $(
+            .seq($rest)
+        )+
+}};
+}
+
+pub struct Seq<SM1, SM2> {
+    first_machine: SM1,
+    second_machine: SM2,
+}
+
+impl<I, SM1, SM2> StateMachine<I> for Seq<SM1, SM2>
+where
+    I: Clone,
+    SM1: StateMachine<I>,
+    SM2: StateMachine<I, Output = SM1::Output>,
+{
+    type State = Either<SM1::State, SM2::State>;
+    type Output = SM1::Output;
+
+    fn start_state(&self) -> Self::State {
+        Either::Left(self.first_machine.start_state())
+    }
+
+    fn done(&self, state: Self::State) -> bool {
+        if let Either::Rigth(state) = state {
+            self.second_machine.done(state)
+        } else {
+            false
+        }
+    }
+
+    fn next_values(
+        &self,
+        mut state: Self::State,
+        input: Option<I>,
+    ) -> (Self::State, Option<Self::Output>) {
+        if let Either::Left(s1) = state {
+            if !self.first_machine.done(s1.clone()) {
+                let (new_s1, out) = self.first_machine.next_values(s1, input);
+                return (Either::Left(new_s1), out);
+            } else {
+                state = Either::Rigth(self.second_machine.start_state());
+            }
+        }
+
+        if let Either::Rigth(s2) = state.clone() {
+            if !self.second_machine.done(s2.clone()) {
+                let (new_s2, out) = self.second_machine.next_values(s2, input);
+                return (Either::Rigth(new_s2), out);
+            }
+        }
+        (state, None)
     }
 }
 

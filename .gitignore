@@ -1,2 +1,4 @@
 *.pyc
-lab/*
+python-files
+lab
+

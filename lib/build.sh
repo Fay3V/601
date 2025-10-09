@@ -1,6 +1,5 @@
 #!/usr/bin/bash
 
- 
 cargo run --release --features=headers --bin generate-headers
 cp sm.h ../brains
 

@@ -81,7 +81,7 @@ RUN wget https://files.pythonhosted.org/packages/source/c/cffi/cffi-1.11.5.tar.g
     python2.6 setup.py install 
  
 # Copy your tar.gz into the container
-COPY lab/afbbebccae39bfa42f9d071e9ed10453_lib601-3-500.tar.gz /tmp/lib601-3-500.tar.gz
+COPY pkg/afbbebccae39bfa42f9d071e9ed10453_lib601-3-500.tar.gz /tmp/lib601-3-500.tar.gz
 
 WORKDIR /tmp
 
