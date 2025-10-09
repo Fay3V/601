@@ -8,6 +8,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 safer-ffi = { path = "/home/adiallo/wks/rust/safer_ffi"}
+rand = "0.9"
+
 
 [features]
 default = []

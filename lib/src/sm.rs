@@ -21,6 +21,17 @@ pub trait StateFullMachine<I, O> {
     }
 }
 
+impl<I, O, F> StateFullMachine<I, O> for F
+where
+    F: FnMut(I) -> O,
+{
+    fn reset(&mut self) {}
+
+    fn step(&mut self, input: Option<I>) -> Option<O> {
+        input.map(|input| self(input))
+    }
+}
+
 pub struct StateFull<I, O, SM>(SM::State, SM)
 where
     I: Clone,
