@@ -1,17 +1,11 @@
 use crate::{
+    io::{Action, Angle, SensorInput},
     sm::{StateFullMachine, StateMachine},
-    sm_course::{Delay, Gain},
 };
-use rand::Rng;
 use safer_ffi::prelude::*;
-use std::{
-    cell::Cell,
-    f64::{self, consts::PI},
-    ops::{Add, Mul},
-};
+pub mod io;
 pub mod sm;
 pub mod sm_course;
-pub mod util;
 
 #[derive_ReprC]
 #[repr(opaque)]
@@ -23,33 +17,6 @@ where
     sfm: Box<dyn StateFullMachine<I, O>>,
 }
 
-#[derive_ReprC]
-#[repr(C)]
-#[derive(Debug, Clone)]
-struct Pose {
-    x: f64,
-    y: f64,
-    theta: f64,
-}
-
-#[derive_ReprC]
-#[repr(C)]
-#[derive(Debug, Clone)]
-struct SensorInput {
-    sonars: [f64; 8],
-    odometry: Pose,
-    // analog_inputs: [f64; 4],
-}
-
-#[derive_ReprC]
-#[repr(C)]
-#[derive(Debug, Clone)]
-struct Action {
-    fvel: f64,
-    rvel: f64,
-    // voltage: f64,
-}
-
 struct Rotate {
     heading_delta: f64,
     rotation_gain: f64,
@@ -57,7 +24,7 @@ struct Rotate {
 }
 
 impl StateMachine<SensorInput> for Rotate {
-    type State = Option<(f64, f64)>;
+    type State = Option<(f64, Angle)>;
     type Output = Action;
 
     fn start_state(&self) -> Self::State {
@@ -66,7 +33,7 @@ impl StateMachine<SensorInput> for Rotate {
 
     fn done(&self, state: Self::State) -> bool {
         state
-            .map(|(theta_acc, _)| (self.heading_delta - theta_acc).abs() < self.angle_epsilon)
+            .map(|(theta_error, _)| theta_error.abs() < self.angle_epsilon)
             .unwrap_or(false)
     }
 
@@ -76,17 +43,15 @@ impl StateMachine<SensorInput> for Rotate {
         input: Option<SensorInput>,
     ) -> (Self::State, Option<Self::Output>) {
         let input = input.expect("input value");
-        let curr_theta = input.odometry.theta;
-        let theta_acc = state
-            .map(|(theta_acc, theta_last)| {
-                theta_acc + util::fix_angle_plus_minus_pi(curr_theta - theta_last)
-            })
-            .unwrap_or(0.0);
+        let theta_curr = Angle::new(input.odometry.theta);
+        let theta_error = state
+            .map(|(theta_error, theta_last)| theta_error - (theta_curr - theta_last))
+            .unwrap_or(self.heading_delta);
         let action = Action {
             fvel: 0.0,
-            rvel: self.rotation_gain * (self.heading_delta - theta_acc),
+            rvel: self.rotation_gain * theta_error,
         };
-        (Some((theta_acc, curr_theta)), Some(action))
+        (Some((theta_error, theta_curr)), Some(action))
     }
 }
 

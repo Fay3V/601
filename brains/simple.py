@@ -70,8 +70,8 @@ class Brain(object):
             input.sonars.idx[i] = sensor_input.sonars[i]        
 
         # Fill pose
-        input.odometry.x = sensor_input.odometry.x
-        input.odometry.y = sensor_input.odometry.y
+        input.odometry.pos.x = sensor_input.odometry.x
+        input.odometry.pos.y = sensor_input.odometry.y
         input.odometry.theta = sensor_input.odometry.theta
 
         output = lib.sm_step(self._c, input[0])
@@ -83,7 +83,7 @@ class Brain(object):
         return [val.ptr[i] for i in range(val.len)]
 
 def setup():
-    robot.behavior = Brain(lib.sm_simple(2*math.pi))
+    robot.behavior = Brain(lib.sm_simple(-4*math.pi))
     # robot.behavior = RotateTSM(-2 * math.pi)
    
 def brainStart():

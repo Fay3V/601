@@ -44,10 +44,14 @@ typedef struct {
     double idx[8];
 } double_8_array_t;
 
-typedef struct Pose {
+typedef struct Position {
     double x;
 
     double y;
+} Position_t;
+
+typedef struct Pose {
+    Position_t pos;
 
     double theta;
 } Pose_t;
