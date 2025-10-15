@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Either<L, R> {
     Left(L),
     Rigth(R),
@@ -69,7 +69,7 @@ impl<I, O, SM> StateFullMachine<I, O> for StateFull<I, O, SM>
 where
     I: Clone,
     SM: StateMachine<I, Output = O>,
-    SM::State: Clone + core::fmt::Debug,
+    SM::State: Clone,
 {
     fn reset(&mut self) {
         self.0 = self.1.start_state();
@@ -427,6 +427,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct If<SM1, SM2, P> {
     first_machine: SM1,
     second_machine: SM2,

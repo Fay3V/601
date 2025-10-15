@@ -195,6 +195,7 @@ where
         I::default()
     }
 }
+
 #[test]
 fn it_works() {
     struct Delay2<I> {
@@ -782,15 +783,15 @@ fn test_seq() {
     );
 
     macro_rules! make_text_sequence {
-    ($first:expr $(, $rest:expr)+ $(,)?) => {{
-        $crate::seq!(
-        CharTSM($first)
-            $(
-                ,CharTSM($rest)
-            )+
-        )
-    }};
-}
+        ($first:expr $(, $rest:expr)+ $(,)?) => {{
+            $crate::seq!(
+            CharTSM($first)
+                $(
+                    ,CharTSM($rest)
+                )+
+            )
+        }};
+    }
     assert_eq!(
         [
             'h', 'e', 'l', 'l', 'o', 'h', 'e', 'l', 'l', 'o', 'h', 'e', 'l', 'l', 'o'
@@ -799,6 +800,78 @@ fn test_seq() {
             .repeat(Some(3))
             .into_state_full()
             .run(None)
+            .as_slice()
+    );
+}
+
+#[test]
+fn exos() {
+    struct MySM;
+    impl StateMachine<i32> for MySM {
+        type State = (i32, i32);
+        type Output = i32;
+
+        fn start_state(&self) -> Self::State {
+            (0, 0)
+        }
+
+        fn done(&self, state: Self::State) -> bool {
+            state.0 >= 3
+        }
+
+        fn next_values(
+            &self,
+            state: Self::State,
+            input: Option<i32>,
+        ) -> (Self::State, Option<Self::Output>) {
+            let input = input.expect("no input");
+            let (count, acc) = state;
+            let out = acc + input;
+            if out >= 100 {
+                ((count + 1, 0), Some(out))
+            } else {
+                ((count, out), Some(out))
+            }
+        }
+    }
+    assert_eq!(
+        [1, 3, 6, 106, 4, 13, 513, 51, 49, 106],
+        MySM.into_state_full()
+            .transduce([
+                1, 2, 3, 100, 4, 9, 500, 51, -2, 57, 103, 1, 1, 1, 1, -10, 207, 3, 1
+            ])
+            .as_slice()
+    );
+    struct MyNewSM;
+    impl StateMachine<i32> for MyNewSM {
+        type State = i32;
+        type Output = i32;
+
+        fn start_state(&self) -> Self::State {
+            0
+        }
+
+        fn done(&self, state: Self::State) -> bool {
+            state > 100
+        }
+
+        fn next_values(
+            &self,
+            state: Self::State,
+            input: Option<i32>,
+        ) -> (Self::State, Option<Self::Output>) {
+            let out = state + input.expect("no input");
+            (out, Some(out))
+        }
+    }
+    assert_eq!(
+        [1, 3, 6, 106, 4, 13, 513, 51, 49, 106],
+        MyNewSM
+            .repeat(Some(3))
+            .into_state_full()
+            .transduce([
+                1, 2, 3, 100, 4, 9, 500, 51, -2, 57, 103, 1, 1, 1, 1, -10, 207, 3, 1
+            ])
             .as_slice()
     );
 }
