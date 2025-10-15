@@ -14,6 +14,16 @@ impl Position {
     pub fn distance(&self, other: Position) -> f64 {
         ((self.x - other.x).powi(2) + (self.y - other.y).powi(2)).sqrt()
     }
+
+    pub fn is_near(&self, other: Position, epsilon: f64) -> bool {
+        self.distance(other) < epsilon
+    }
+
+    pub fn angle_to(&self, other: Position) -> Angle {
+        let dy = other.y - self.y;
+        let dx = other.x - self.x;
+        Angle::new(dy.atan2(dx))
+    }
 }
 
 #[derive_ReprC]
@@ -35,7 +45,7 @@ pub struct SensorInput {
 
 #[derive_ReprC]
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Action {
     pub fvel: f64,
     pub rvel: f64,
@@ -47,6 +57,9 @@ pub struct Angle(pub(crate) f64);
 impl Angle {
     pub fn new(value: f64) -> Self {
         Self((value + PI).rem_euclid(2.0 * PI) - PI)
+    }
+    pub fn is_near(self, other: Angle, epsilon: f64) -> bool {
+        (self - other).0.abs() < epsilon
     }
 }
 

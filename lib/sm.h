@@ -38,7 +38,7 @@ sm_run (
 
 StateFullMachineOpaque_SensorInput_Action_t *
 sm_simple (
-    double heading_delta);
+    double incr);
 
 typedef struct {
     double idx[8];

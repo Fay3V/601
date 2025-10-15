@@ -17,97 +17,145 @@ where
     sfm: Box<dyn StateFullMachine<I, O>>,
 }
 
-struct Rotate {
-    heading_delta: f64,
+struct XYDriver {
+    forward_gain: f64,
     rotation_gain: f64,
     angle_epsilon: f64,
+    distance_epsilon: f64,
 }
 
-impl StateMachine<SensorInput> for Rotate {
-    type State = Option<(f64, Angle)>;
+impl StateMachine<(Option<Position>, SensorInput)> for XYDriver {
+    type State = bool;
     type Output = Action;
 
     fn start_state(&self) -> Self::State {
-        None
+        false
     }
 
     fn done(&self, state: Self::State) -> bool {
         state
-            .map(|(theta_error, _)| theta_error.abs() < self.angle_epsilon)
-            .unwrap_or(false)
     }
+
+    fn next_values(
+        &self,
+        _state: Self::State,
+        input: Option<(Option<Position>, SensorInput)>,
+    ) -> (Self::State, Option<Self::Output>) {
+        let (goal_pos, sensors) = input.expect("no input");
+        let robot_pos = sensors.odometry.pos;
+        let robot_theta = Angle::new(sensors.odometry.theta);
+
+        if let Some(goal_pos) = goal_pos {
+            let heading_theta = robot_pos.angle_to(goal_pos);
+            if robot_theta.is_near(heading_theta, self.angle_epsilon) {
+                let distance_error = robot_pos.distance(goal_pos);
+                if distance_error < self.distance_epsilon {
+                    (true, Some(Action::default()))
+                } else {
+                    (
+                        false,
+                        Some(Action {
+                            fvel: distance_error * self.forward_gain,
+                            rvel: 0.0,
+                        }),
+                    )
+                }
+            } else {
+                let heading_error = heading_theta - robot_theta;
+                (
+                    false,
+                    Some(Action {
+                        fvel: 0.0,
+                        rvel: heading_error.0 * self.rotation_gain,
+                    }),
+                )
+            }
+        } else {
+            (true, Some(Action::default()))
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+struct SpyroGyra {
+    distance_epsilon: f64,
+    incr: f64,
+}
+
+impl StateMachine<SensorInput> for SpyroGyra {
+    type State = (Direction, f64, Option<Position>);
+    type Output = (Option<Position>, SensorInput);
+
+    fn start_state(&self) -> Self::State {
+        (Direction::South, 0.0, None)
+    }
+
+    // fn done(&self, state: Self::State) -> bool {
+    //     // self.xy.done(state)
+    //     false
+    // }
 
     fn next_values(
         &self,
         state: Self::State,
         input: Option<SensorInput>,
     ) -> (Self::State, Option<Self::Output>) {
-        let input = input.expect("input value");
-        let theta_curr = Angle::new(input.odometry.theta);
-        let theta_error = state
-            .map(|(theta_error, theta_last)| theta_error - (theta_curr - theta_last))
-            .unwrap_or(self.heading_delta);
-        let action = Action {
-            fvel: 0.0,
-            rvel: self.rotation_gain * theta_error,
+        let input = input.expect("no input");
+        let (direction, length, sub_goal) = state;
+        let robot_pos = input.odometry.pos;
+        let mut sub_goal = sub_goal.unwrap_or(robot_pos);
+        let (direction, length, sub_goal) = if robot_pos.is_near(sub_goal, self.distance_epsilon) {
+            let length = length + self.incr;
+            let direction = match direction {
+                Direction::North => {
+                    sub_goal.x -= length;
+                    Direction::West
+                }
+                Direction::South => {
+                    sub_goal.x += length;
+                    Direction::East
+                }
+                Direction::East => {
+                    sub_goal.y += length;
+                    Direction::North
+                }
+                Direction::West => {
+                    sub_goal.y -= length;
+                    Direction::South
+                }
+            };
+            (direction, length, sub_goal)
+        } else {
+            (direction, length, sub_goal)
         };
-        (Some((theta_error, theta_curr)), Some(action))
-    }
-}
-
-struct Forward {
-    delta_desired: f64,
-    forward_gain: f64,
-    dist_target_epsilon: f64,
-}
-
-impl StateMachine<SensorInput> for Forward {
-    type State = Option<(Position, Position)>;
-    type Output = Action;
-
-    fn start_state(&self) -> Self::State {
-        None
-    }
-
-    fn done(&self, state: Self::State) -> bool {
-        state
-            .map(|(start_pos, last_pos)| {
-                (start_pos.distance(last_pos) - self.delta_desired).abs() < self.dist_target_epsilon
-            })
-            .unwrap_or(false)
-    }
-
-    fn next_values(
-        &self,
-        state: Self::State,
-        input: Option<SensorInput>,
-    ) -> (Self::State, Option<Self::Output>) {
-        let input = input.expect("input value");
-        let curr_pos = input.odometry.pos;
-        let start_pos = state.map(|(start_pos, _)| start_pos).unwrap_or(curr_pos);
-        let action = Action {
-            fvel: self.forward_gain * (self.delta_desired - start_pos.distance(curr_pos)),
-            rvel: 0.0,
-        };
-        (Some((start_pos, curr_pos)), Some(action))
+        (
+            (direction, length, Some(sub_goal)),
+            Some((Some(sub_goal), input)),
+        )
     }
 }
 
 #[ffi_export]
-fn sm_simple(heading_delta: f64) -> repr_c::Box<StateFullMachineOpaque<SensorInput, Action>> {
+fn sm_simple(incr: f64) -> repr_c::Box<StateFullMachineOpaque<SensorInput, Action>> {
     Box::new(StateFullMachineOpaque {
         sfm: Box::new(
-            // Rotate {
-            //     heading_delta,
-            //     rotation_gain: 0.5,
-            //     angle_epsilon: 0.01,
-            // }
-            // .into_state_full(),
-            Forward {
-                delta_desired: heading_delta,
-                forward_gain: 2.0,
-                dist_target_epsilon: 0.02,
+            SpyroGyra {
+                distance_epsilon: 0.02,
+                incr,
             }
+            .cascade(XYDriver {
+                forward_gain: 2.0,
+                rotation_gain: 2.0,
+                angle_epsilon: 0.05,
+                distance_epsilon: 0.02,
+            })
             .into_state_full(),
         ),
     })
