@@ -1,5 +1,5 @@
 use crate::{
-    io::{Action, Angle, SensorInput},
+    io::{Action, Angle, Position, SensorInput},
     sm::{StateFullMachine, StateMachine},
 };
 use safer_ffi::prelude::*;
@@ -55,14 +55,58 @@ impl StateMachine<SensorInput> for Rotate {
     }
 }
 
+struct Forward {
+    delta_desired: f64,
+    forward_gain: f64,
+    dist_target_epsilon: f64,
+}
+
+impl StateMachine<SensorInput> for Forward {
+    type State = Option<(Position, Position)>;
+    type Output = Action;
+
+    fn start_state(&self) -> Self::State {
+        None
+    }
+
+    fn done(&self, state: Self::State) -> bool {
+        state
+            .map(|(start_pos, last_pos)| {
+                (start_pos.distance(last_pos) - self.delta_desired).abs() < self.dist_target_epsilon
+            })
+            .unwrap_or(false)
+    }
+
+    fn next_values(
+        &self,
+        state: Self::State,
+        input: Option<SensorInput>,
+    ) -> (Self::State, Option<Self::Output>) {
+        let input = input.expect("input value");
+        let curr_pos = input.odometry.pos;
+        let start_pos = state.map(|(start_pos, _)| start_pos).unwrap_or(curr_pos);
+        let action = Action {
+            fvel: self.forward_gain * (self.delta_desired - start_pos.distance(curr_pos)),
+            rvel: 0.0,
+        };
+        (Some((start_pos, curr_pos)), Some(action))
+    }
+}
+
 #[ffi_export]
 fn sm_simple(heading_delta: f64) -> repr_c::Box<StateFullMachineOpaque<SensorInput, Action>> {
     Box::new(StateFullMachineOpaque {
         sfm: Box::new(
-            Rotate {
-                heading_delta,
-                rotation_gain: 0.5,
-                angle_epsilon: 0.01,
+            // Rotate {
+            //     heading_delta,
+            //     rotation_gain: 0.5,
+            //     angle_epsilon: 0.01,
+            // }
+            // .into_state_full(),
+            Forward {
+                delta_desired: heading_delta,
+                forward_gain: 2.0,
+                dist_target_epsilon: 0.02,
             }
             .into_state_full(),
         ),

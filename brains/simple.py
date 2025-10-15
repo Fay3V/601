@@ -83,7 +83,8 @@ class Brain(object):
         return [val.ptr[i] for i in range(val.len)]
 
 def setup():
-    robot.behavior = Brain(lib.sm_simple(-4*math.pi))
+    robot.behavior = Brain(lib.sm_simple(2))
+    # robot.behavior = Brain(lib.sm_simple(-4*math.pi))
     # robot.behavior = RotateTSM(-2 * math.pi)
    
 def brainStart():

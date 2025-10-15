@@ -4,10 +4,16 @@ use safer_ffi::derive_ReprC;
 
 #[derive_ReprC]
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Position {
     pub x: f64,
     pub y: f64,
+}
+
+impl Position {
+    pub fn distance(&self, other: Position) -> f64 {
+        ((self.x - other.x).powi(2) + (self.y - other.y).powi(2)).sqrt()
+    }
 }
 
 #[derive_ReprC]
