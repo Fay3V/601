@@ -4,7 +4,7 @@ use safer_ffi::derive_ReprC;
 
 #[derive_ReprC]
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Position {
     pub x: f64,
     pub y: f64,
@@ -28,7 +28,7 @@ impl Position {
 
 #[derive_ReprC]
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Pose {
     pub pos: Position,
     pub theta: f64,
@@ -36,7 +36,7 @@ pub struct Pose {
 
 #[derive_ReprC]
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SensorInput {
     pub sonars: [f64; 8],
     pub odometry: Pose,

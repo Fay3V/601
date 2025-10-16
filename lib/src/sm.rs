@@ -28,14 +28,17 @@ pub trait StateFullMachine<I, O> {
             .collect()
     }
 
-    fn run(&mut self, n: Option<usize>) -> Vec<O> {
+    fn run(&mut self, n: Option<usize>) -> Vec<O>
+    where
+        I: Default,
+    {
         self.reset();
 
         let cb = |_| {
             if self.is_done() {
                 None
             } else {
-                self.step(None)
+                self.step(Some(I::default()))
             }
         };
 
@@ -47,22 +50,8 @@ pub trait StateFullMachine<I, O> {
     }
 }
 
-impl<I, O, F> StateFullMachine<I, O> for F
-where
-    F: FnMut(I) -> O,
-{
-    fn reset(&mut self) {}
-    fn step(&mut self, input: Option<I>) -> Option<O> {
-        input.map(|input| self(input))
-    }
-    fn is_done(&self) -> bool {
-        false
-    }
-}
-
 pub struct StateFull<I, O, SM>(SM::State, SM)
 where
-    I: Clone,
     SM: StateMachine<I, Output = O>;
 
 impl<I, O, SM> StateFullMachine<I, O> for StateFull<I, O, SM>
@@ -86,16 +75,8 @@ where
     }
 }
 
-impl<I, O, SM> StateFull<I, O, SM>
-where
-    I: Clone,
-    SM: StateMachine<I, Output = O>,
-    SM::State: Clone,
-{
-}
-
-pub trait StateMachine<Input: Clone> {
-    type State: Clone;
+pub trait StateMachine<Input> {
+    type State;
     type Output;
 
     fn start_state(&self) -> Self::State;
@@ -252,6 +233,28 @@ pub trait StateMachine<Input: Clone> {
     }
 }
 
+impl<I, O, F> StateMachine<I> for F
+where
+    I: Clone + core::fmt::Debug,
+    F: Fn(I) -> O,
+{
+    type State = ();
+    type Output = O;
+
+    fn start_state(&self) -> Self::State {
+        ()
+    }
+
+    fn next_values(
+        &self,
+        _state: Self::State,
+        input: Option<I>,
+    ) -> (Self::State, Option<Self::Output>) {
+        dbg!(input.clone());
+        ((), input.map(|input| self(input)))
+    }
+}
+
 pub struct Until<SM, P> {
     machine: SM,
     pred: P,
@@ -300,6 +303,7 @@ where
     I: Clone,
     SM: StateMachine<I>,
     P: Fn(I) -> bool,
+    SM::State: Clone,
 {
     type State = (SM::State, bool);
     type Output = SM::Output;
@@ -340,6 +344,7 @@ impl<I, SM> StateMachine<I> for Repeat<SM>
 where
     I: Clone,
     SM: StateMachine<I>,
+    SM::State: Clone,
 {
     type State = (usize, SM::State);
     type Output = SM::Output;
@@ -387,6 +392,8 @@ where
     I: Clone,
     SM1: StateMachine<I>,
     SM2: StateMachine<I, Output = SM1::Output>,
+    SM1::State: Clone,
+    SM2::State: Clone,
 {
     type State = Either<SM1::State, SM2::State>;
     type Output = SM1::Output;
@@ -571,6 +578,8 @@ where
     Op: Fn(I, SM2::Output) -> I1,
     SM1: StateMachine<I1>,
     SM2: StateMachine<SM1::Output>,
+    SM1::State: Clone,
+    SM2::State: Clone,
 {
     type State = (SM1::State, SM2::State);
     type Output = SM1::Output;

@@ -1,10 +1,6 @@
 use crate::sm::StateFullMachine;
 use crate::sm::StateMachine;
-use core::fmt;
-use std::{
-    marker::PhantomData,
-    ops::{Add, Mul},
-};
+use std::{marker::PhantomData, ops::Add};
 
 pub struct Incr<const STEP: i64>;
 impl<const STEP: i64> StateMachine<i64> for Incr<STEP> {
@@ -35,7 +31,10 @@ impl<I> Delay<I> {
     }
 }
 
-impl<I: Clone + fmt::Debug> StateMachine<I> for Delay<I> {
+impl<I> StateMachine<I> for Delay<I>
+where
+    I: Clone,
+{
     type State = Option<I>;
     type Output = I;
 
@@ -49,118 +48,6 @@ impl<I: Clone + fmt::Debug> StateMachine<I> for Delay<I> {
 
     fn start_state(&self) -> Self::State {
         Some(self.val.clone())
-    }
-}
-
-#[derive(Default)]
-pub struct Adder<Lhs, Rhs> {
-    _phantom: PhantomData<(Lhs, Rhs)>,
-}
-
-impl<Lhs, Rhs, O> StateMachine<(Lhs, Rhs)> for Adder<Lhs, Rhs>
-where
-    Lhs: Clone,
-    Rhs: Clone,
-    Lhs: Add<Rhs, Output = O>,
-{
-    type State = ();
-    type Output = O;
-
-    fn start_state(&self) -> Self::State {
-        ()
-    }
-
-    fn next_values(
-        &self,
-        _state: Self::State,
-        input: Option<(Lhs, Rhs)>,
-    ) -> (Self::State, Option<Self::Output>) {
-        let output = input.map(|(l, r)| l + r);
-        ((), output)
-    }
-}
-
-#[derive(Default)]
-pub struct Multiplier<Lhs, Rhs> {
-    _phantom: PhantomData<(Lhs, Rhs)>,
-}
-
-impl<Lhs, Rhs, O> StateMachine<(Lhs, Rhs)> for Multiplier<Lhs, Rhs>
-where
-    Lhs: Clone,
-    Rhs: Clone,
-    Lhs: Mul<Rhs, Output = O>,
-{
-    type State = ();
-    type Output = O;
-
-    fn start_state(&self) -> Self::State {
-        ()
-    }
-
-    fn next_values(
-        &self,
-        _state: Self::State,
-        input: Option<(Lhs, Rhs)>,
-    ) -> (Self::State, Option<Self::Output>) {
-        let output = input.map(|(l, r)| l * r);
-        ((), output)
-    }
-}
-
-#[derive(Default)]
-pub struct Constant<const VAL: i64>;
-impl<const VAL: i64> StateMachine<i64> for Constant<VAL> {
-    type State = ();
-    type Output = i64;
-
-    fn next_values(
-        &self,
-        _state: Self::State,
-        _input: Option<i64>,
-    ) -> (Self::State, Option<Self::Output>) {
-        ((), Some(VAL))
-    }
-
-    fn start_state(&self) -> Self::State {
-        ()
-    }
-}
-
-#[derive(Default)]
-pub struct Gain<I, G> {
-    gain: G,
-    _phantom: PhantomData<I>,
-}
-
-impl<I, G> Gain<I, G> {
-    pub fn new(gain: G) -> Self {
-        Self {
-            gain,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<I, G> StateMachine<I> for Gain<I, G>
-where
-    I: Clone,
-    G: Clone,
-    I: Mul<G>,
-{
-    type State = ();
-    type Output = <I as Mul<G>>::Output;
-
-    fn next_values(
-        &self,
-        _state: Self::State,
-        input: Option<I>,
-    ) -> (Self::State, Option<Self::Output>) {
-        ((), input.map(|input| input * self.gain.clone()))
-    }
-
-    fn start_state(&self) -> Self::State {
-        ()
     }
 }
 
@@ -209,7 +96,10 @@ fn it_works() {
         }
     }
 
-    impl<I: Clone + fmt::Debug> StateMachine<I> for Delay2<I> {
+    impl<I> StateMachine<I> for Delay2<I>
+    where
+        I: Clone,
+    {
         type State = (Option<I>, Option<I>);
         type Output = I;
 
@@ -430,7 +320,7 @@ fn test_parallel_x() {
         &[5, 3, 7, 3, 3, 9, 3, 3, 3, 11],
         Incr::<1>
             .parallel(Incr::<2>)
-            .cascade(Adder::default())
+            .cascade(|(i1, i2)| i1 + i2)
             .into_state_full()
             .transduce([1, 0, 2, 0, 0, 3, 0, 0, 0, 4])
             .as_slice()
@@ -454,7 +344,7 @@ fn test_feedback() {
 fn test_adder() {
     assert_eq!(
         &[4, 2, 0, -1],
-        Adder::default()
+        (|(i1, i2)| i1 + i2)
             .into_state_full()
             .transduce([(1, 3), (0, 2), (0, 0), (3, -4)])
             .as_slice()
@@ -467,7 +357,7 @@ fn test_fibo() {
         &[1, 2, 3, 5, 8, 13, 21, 34, 55, 89],
         Delay::new(1)
             .parallel(Delay::new(1).cascade(Delay::default()))
-            .cascade(Adder::default())
+            .cascade(|(i1, i2)| i1 + i2)
             .feedback()
             .into_state_full()
             .run(Some(10))
@@ -477,8 +367,8 @@ fn test_fibo() {
     assert_eq!(
         &[1, 2, 3, 5, 8, 13, 21, 34, 55, 89],
         Delay::new(1)
-            .parallel(Gain::new(1))
-            .cascade(Adder::default())
+            .parallel(|i| i * 1)
+            .cascade(|(i1, i2)| i1 + i2)
             .cascade(Delay::new(1))
             .feedback()
             .into_state_full()
@@ -491,9 +381,9 @@ fn test_fibo() {
 fn test_double() {
     assert_eq!(
         &[1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024],
-        Constant::<2>::default()
-            .parallel(Gain::new(1))
-            .cascade(Multiplier::default())
+        (|_| 2)
+            .parallel(|i| i * 1)
+            .cascade(|(i1, i2)| i1 * i2)
             .cascade(Delay::new(1))
             .feedback()
             .into_state_full()
@@ -503,8 +393,8 @@ fn test_double() {
 
     assert_eq!(
         &[1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024],
-        Constant::<2>::default()
-            .cascade(Multiplier::default().cascade(Delay::new(1)).feedback2())
+        (|_i: i32| 2)
+            .cascade((|(i1, i2)| i1 * i2).cascade(Delay::new(1)).feedback2())
             .into_state_full()
             .run(Some(11))
             .as_slice()
@@ -516,15 +406,15 @@ fn test_feedback_op() {
     assert_eq!(
         &[0, 0, 1, 3, 6, 10, 15, 21, 28, 36],
         Delay::new(0)
-            .feedback_op(Gain::new(1), |i1, i2| i1 + i2)
+            .feedback_op(|i| i * 1, |i1, i2| i1 + i2)
             .into_state_full()
             .transduce(0..10)
             .as_slice()
     );
 
-    let fac = Delay::new(1).feedback_op(Gain::new(1), |i1, i2| i1 * i2);
+    let fac = Delay::new(1).feedback_op(|i| i * 1, |i1, i2| i1 * i2);
     // let counter = Incr::<1>.cascade(Delay::new(1)).feedback();
-    let counter = Delay::new(1).feedback_op(Gain::new(1), |i1, i2| i1 + i2);
+    let counter = Delay::new(1).feedback_op(|i| i * 1, |i1, i2| i1 + i2);
     assert_eq!(
         &[1, 1, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800],
         counter
@@ -539,8 +429,8 @@ fn test_feedback_op() {
 fn test_switch() {
     assert_eq!(
         &[0, 3, 4, 9, 8, 15, 12, 21, 16, 27],
-        Gain::new(2)
-            .switch(Gain::new(3), |i| i % 2 == 0)
+        (|i| i * 2)
+            .switch(|i| i * 3, |i| i % 2 == 0)
             .into_state_full()
             .transduce(0..10)
             .as_slice()
@@ -551,8 +441,8 @@ fn test_switch() {
 fn test_mux() {
     assert_eq!(
         &[0, 3, 4, 9, 8, 15, 12, 21, 16, 27],
-        Gain::new(2)
-            .mux(Gain::new(3), |i| i % 2 == 0)
+        (|i| i * 2)
+            .mux(|i| i * 3, |i| i % 2 == 0)
             .into_state_full()
             .transduce(0..10)
             .as_slice()
@@ -584,16 +474,16 @@ fn test_mux_vs_switch() {
 fn test_if() {
     assert_eq!(
         &[0, 2, 4, 6, 8, 10, 12, 14, 16, 18],
-        Gain::new(2)
-            .r#if(Gain::new(3), |i| i % 2 == 0)
+        (|i| i * 2)
+            .r#if(|i| i * 3, |i| i % 2 == 0)
             .into_state_full()
             .transduce(0..10)
             .as_slice()
     );
     assert_eq!(
         &[0, 3, 6, 9, 12, 15, 18, 21, 24, 27],
-        Gain::new(2)
-            .r#if(Gain::new(3), |i| i % 2 != 0)
+        (|i| i * 2)
+            .r#if(|i| i * 3, |i| i % 2 != 0)
             .into_state_full()
             .transduce(0..10)
             .as_slice()
