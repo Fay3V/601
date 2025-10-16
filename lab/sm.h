@@ -38,20 +38,20 @@ sm_run (
 
 StateFullMachineOpaque_SensorInput_Action_t *
 sm_simple (
-    double incr);
+    double _incr);
 
 typedef struct {
     double idx[8];
 } double_8_array_t;
 
-typedef struct Position {
+typedef struct Point {
     double x;
 
     double y;
-} Position_t;
+} Point_t;
 
 typedef struct Pose {
-    Position_t pos;
+    Point_t pos;
 
     double theta;
 } Pose_t;

@@ -1,4 +1,5 @@
 *.pyc
 python-files
-lab
+lab/*.zip
+lab/*.tar.gz
 

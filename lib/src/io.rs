@@ -5,21 +5,25 @@ use safer_ffi::derive_ReprC;
 #[derive_ReprC]
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct Position {
+pub struct Point {
     pub x: f64,
     pub y: f64,
 }
 
-impl Position {
-    pub fn distance(&self, other: Position) -> f64 {
+impl Point {
+    pub fn new(x: f64, y: f64) -> Self {
+        Self { x, y }
+    }
+
+    pub fn distance(&self, other: Point) -> f64 {
         ((self.x - other.x).powi(2) + (self.y - other.y).powi(2)).sqrt()
     }
 
-    pub fn is_near(&self, other: Position, epsilon: f64) -> bool {
+    pub fn is_near(&self, other: Point, epsilon: f64) -> bool {
         self.distance(other) < epsilon
     }
 
-    pub fn angle_to(&self, other: Position) -> Angle {
+    pub fn angle_to(&self, other: Point) -> Angle {
         let dy = other.y - self.y;
         let dx = other.x - self.x;
         Angle::new(dy.atan2(dx))
@@ -30,7 +34,7 @@ impl Position {
 #[repr(C)]
 #[derive(Debug, Clone, Default)]
 pub struct Pose {
-    pub pos: Position,
+    pub pos: Point,
     pub theta: f64,
 }
 

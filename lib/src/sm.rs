@@ -235,7 +235,7 @@ pub trait StateMachine<Input> {
 
 impl<I, O, F> StateMachine<I> for F
 where
-    I: Clone + core::fmt::Debug,
+    I: Clone,
     F: Fn(I) -> O,
 {
     type State = ();
@@ -250,7 +250,6 @@ where
         _state: Self::State,
         input: Option<I>,
     ) -> (Self::State, Option<Self::Output>) {
-        dbg!(input.clone());
         ((), input.map(|input| self(input)))
     }
 }
@@ -753,6 +752,11 @@ where
             self.first_machine.start_state(),
             self.second_machine.start_state(),
         )
+    }
+
+    fn done(&self, state: Self::State) -> bool {
+        let (s1, s2) = state;
+        self.first_machine.done(s1) || self.second_machine.done(s2)
     }
 
     fn next_values(
