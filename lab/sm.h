@@ -17,25 +17,6 @@ void
 sm_reset (
     StateFullMachineOpaque_SensorInput_Action_t * sm);
 
-typedef struct Action {
-    double fvel;
-
-    double rvel;
-} Action_t;
-
-typedef struct Vec_Action {
-    Action_t * ptr;
-
-    size_t len;
-
-    size_t cap;
-} Vec_Action_t;
-
-Vec_Action_t
-sm_run (
-    StateFullMachineOpaque_SensorInput_Action_t * sm,
-    size_t n);
-
 StateFullMachineOpaque_SensorInput_Action_t *
 sm_simple (
     double _incr);
@@ -61,6 +42,12 @@ typedef struct SensorInput {
 
     Pose_t odometry;
 } SensorInput_t;
+
+typedef struct Action {
+    double fvel;
+
+    double rvel;
+} Action_t;
 
 Action_t
 sm_step (

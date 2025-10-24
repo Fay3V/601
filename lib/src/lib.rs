@@ -1,6 +1,6 @@
 use crate::{
     io::{Action, Angle, Point, SensorInput},
-    sm::{StateFullMachine, StateMachine},
+    sm::{IntoStateMachine, StateFullMachine, StateMachine, StateMachineExt},
 };
 use safer_ffi::prelude::*;
 pub mod io;
@@ -38,14 +38,11 @@ struct FollowFigure<SM> {
     sm: SM,
 }
 
-impl<SM, I> StateMachine<I> for FollowFigure<SM>
+impl<SM, In, Out> StateMachine<In, Out> for FollowFigure<SM>
 where
-    I: Clone,
-    SM: StateMachine<(Point, I)>,
-    SM::State: Clone,
+    SM: StateMachine<(Point, In), Out>,
 {
     type State = (usize, SM::State);
-    type Output = SM::Output;
 
     fn start_state(&self) -> Self::State {
         (0, self.sm.start_state())
@@ -55,11 +52,7 @@ where
         (state.0 == self.fig.len() - 1) && self.sm.done(state.1.clone())
     }
 
-    fn next_values(
-        &self,
-        state: Self::State,
-        input: Option<I>,
-    ) -> (Self::State, Option<Self::Output>) {
+    fn next_values(&self, state: Self::State, input: Option<In>) -> (Self::State, Option<Out>) {
         let input = input.expect("no input");
         let mut idx = state.0;
         if self.sm.done(state.1.clone()) && idx < self.fig.len() - 1 {
@@ -98,9 +91,10 @@ fn sm_simple(_incr: f64) -> repr_c::Box<StateFullMachineOpaque<SensorInput, Acti
                         .until(|(goal, (position, _)): (Point, (Point, Angle))| {
                             position.is_near(goal, 0.02)
                         }),
-                ),
+                )
+                .into_state_machine(),
             }
-            .into_state_full(),
+            .into_state_full_machine(),
         ),
     })
     .into()
@@ -111,13 +105,13 @@ fn sm_step(sm: &'_ mut StateFullMachineOpaque<SensorInput, Action>, input: Senso
     sm.sfm.step(Some(input)).unwrap_or_default()
 }
 
-#[ffi_export]
-fn sm_run(
-    sm: &'_ mut StateFullMachineOpaque<SensorInput, Action>,
-    n: usize,
-) -> repr_c::Vec<Action> {
-    sm.sfm.run(Some(n)).into()
-}
+// #[ffi_export]
+// fn sm_run(
+//     sm: &'_ mut StateFullMachineOpaque<SensorInput, Action>,
+//     n: usize,
+// ) -> repr_c::Vec<Action> {
+//     sm.sfm.transduce(0..n).into()
+// }
 
 #[ffi_export]
 fn sm_is_done(sm: &'_ mut StateFullMachineOpaque<SensorInput, Action>) -> bool {
@@ -137,4 +131,8 @@ pub fn generate_headers() -> ::std::io::Result<()> {
         .with_language(Language::Python)
         .to_file(format!("{}.h", env!("CARGO_PKG_NAME")))?
         .generate()
+}
+
+impl_into_state_machine! {
+struct FollowFigure<SM> ;
 }

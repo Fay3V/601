@@ -6,65 +6,34 @@ pub enum Either<L, R> {
     Rigth(R),
 }
 
-pub trait StateFullMachine<I, O> {
+pub trait StateFullMachine<In, Out> {
     fn reset(&mut self);
-    fn step(&mut self, input: Option<I>) -> Option<O>;
+    fn step(&mut self, input: Option<In>) -> Option<Out>;
     fn is_done(&self) -> bool;
-
-    fn transduce<'a, II: IntoIterator<Item = I>>(&'a mut self, inputs: II) -> Vec<O>
-    where
-        Self: Sized,
-    {
-        self.reset();
-        inputs
-            .into_iter()
-            .map_while(|input| {
-                if self.is_done() {
-                    None
-                } else {
-                    self.step(Some(input))
-                }
-            })
-            .collect()
-    }
-
-    fn run(&mut self, n: Option<usize>) -> Vec<O>
-    where
-        I: Default,
-    {
-        self.reset();
-
-        let cb = |_| {
-            if self.is_done() {
-                None
-            } else {
-                self.step(Some(I::default()))
-            }
-        };
-
-        if let Some(n) = n {
-            (0..n).map_while(cb).collect()
-        } else {
-            (0..).map_while(cb).collect()
-        }
-    }
 }
 
-pub struct StateFull<I, O, SM>(SM::State, SM)
+pub struct StateFull<In, Out, SM>(SM::State, SM)
 where
-    SM: StateMachine<I, Output = O>;
+    SM: StateMachine<In, Out>;
 
-impl<I, O, SM> StateFullMachine<I, O> for StateFull<I, O, SM>
+impl<In, Out, SM> StateFull<In, Out, SM>
 where
-    I: Clone,
-    SM: StateMachine<I, Output = O>,
+    SM: StateMachine<In, Out>,
+{
+    pub fn new(sm: SM) -> Self {
+        Self(sm.start_state(), sm)
+    }
+}
+impl<In, Out, SM> StateFullMachine<In, Out> for StateFull<In, Out, SM>
+where
+    SM: StateMachine<In, Out>,
     SM::State: Clone,
 {
     fn reset(&mut self) {
         self.0 = self.1.start_state();
     }
 
-    fn step(&mut self, input: Option<I>) -> Option<O> {
+    fn step(&mut self, input: Option<In>) -> Option<Out> {
         let (new_state, output) = self.1.next_values(self.0.clone(), input);
         self.0 = new_state;
         output
@@ -75,182 +44,454 @@ where
     }
 }
 
-pub trait StateMachine<Input> {
-    type State;
-    type Output;
+pub trait StateMachine<In, Out> {
+    type State: Clone;
 
     fn start_state(&self) -> Self::State;
-    fn next_values(
-        &self,
-        state: Self::State,
-        input: Option<Input>,
-    ) -> (Self::State, Option<Self::Output>);
+    fn next_values(&self, state: Self::State, input: Option<In>) -> (Self::State, Option<Out>);
 
     fn done(&self, _state: Self::State) -> bool {
         false
     }
 
-    fn into_state_full(self) -> StateFull<Input, Self::Output, Self>
+    fn transduce<I, II: IntoIterator<Item = I>>(&self, inputs: II) -> impl Iterator<Item = Out>
     where
         Self: Sized,
+        I: Into<In>,
     {
-        StateFull(self.start_state(), self)
+        let mut state = self.start_state();
+        inputs.into_iter().map_while(move |input| {
+            if self.done(state.clone()) {
+                None
+            } else {
+                let (new_state, output) = self.next_values(state.clone(), Some(input.into()));
+                state = new_state;
+                output
+            }
+        })
+        // .collect()
     }
 
-    fn cascade<I2, SM2>(self, next_machine: SM2) -> Cascade<Self, SM2>
+    fn run(&self) -> impl Iterator<Item = Out>
+    where
+        In: Default,
+        Self: Sized,
+    {
+        let mut state = self.start_state();
+        (0..).into_iter().map_while(move |_input| {
+            if self.done(state.clone()) {
+                None
+            } else {
+                let (new_state, output) = self.next_values(state.clone(), Some(In::default()));
+                state = new_state;
+                output
+            }
+        })
+    }
+}
+
+pub trait StateMachineExt {
+    fn cascade<In, Out, O, SM>(self, sm: SM) -> impl IntoStateMachine<In, O>
     where
         Self: Sized,
-        I2: Clone,
-        SM2: StateMachine<I2>,
-        Self: StateMachine<Input, Output = I2>,
+        SM: IntoStateMachine<Out, O>,
+        Self: IntoStateMachine<In, Out>;
+
+    fn parallel<In, Out, SM, O>(self, next_machine: SM) -> impl IntoStateMachine<In, (Out, O)>
+    where
+        In: Clone,
+        Self: Sized,
+        SM: IntoStateMachine<In, O>,
+        Self: IntoStateMachine<In, Out>;
+
+    // //     fn parallel2<I2, SM2>(self, next_machine: SM2) -> Parallel2<Self, SM2>
+    // //     where
+    // //         Self: Sized,
+    // //         I2: Clone,
+    // //         SM2: StateMachine<I2>,
+    // //     {
+    // //         Parallel2 {
+    // //             machine1: self,
+    // //             machine2: next_machine,
+    // //         }
+    // //     }
+
+    fn feedback<In>(self) -> impl IntoStateMachine<In, In>
+    where
+        In: Clone,
+        Self: Sized,
+        Self: IntoStateMachine<In, In>;
+
+    fn feedback2<In, Out>(self) -> impl IntoStateMachine<In, Out>
+    where
+        Self: Sized,
+        Self: IntoStateMachine<(In, Out), Out>,
+        Out: Clone;
+
+    // //     fn feedback_op<SM, Op>(self, machine: SM, op: Op) -> FeedbackOp<Self, SM, Op, Input>
+    // //     where
+    // //         Self: Sized,
+    // //     {
+    // //         FeedbackOp {
+    // //             first_machine: self,
+    // //             second_machine: machine,
+    // //             op,
+    // //             _phantom: PhantomData,
+    // //         }
+    // //     }
+
+    fn switch<In, Out, SM, P>(self, machine: SM, pred: P) -> impl IntoStateMachine<In, Out>
+    where
+        Self: Sized,
+        Self: IntoStateMachine<In, Out>,
+        SM: IntoStateMachine<In, Out>,
+        In: Clone,
+        P: Fn(In) -> bool;
+
+    fn mux<In, Out, SM, P>(self, machine: SM, pred: P) -> impl IntoStateMachine<In, Out>
+    where
+        Self: Sized,
+        Self: IntoStateMachine<In, Out>,
+        SM: IntoStateMachine<In, Out>,
+        In: Clone,
+        P: Fn(In) -> bool;
+
+    fn r#if<In, Out, SM, P>(self, machine: SM, pred: P) -> impl IntoStateMachine<In, Out>
+    where
+        Self: Sized,
+        Self: IntoStateMachine<In, Out>,
+        SM: IntoStateMachine<In, Out>,
+        In: Clone,
+        P: Fn(In) -> bool;
+
+    fn repeat<In, Out>(self, n: Option<usize>) -> impl IntoStateMachine<In, Out>
+    where
+        Self: Sized,
+        Self: IntoStateMachine<In, Out>;
+
+    fn repeat_until<In, Out, P>(self, pred: P) -> impl IntoStateMachine<In, Out>
+    where
+        Self: Sized,
+        Self: IntoStateMachine<In, Out>,
+        In: Clone,
+        P: Fn(In) -> bool;
+
+    fn until<In, Out, P>(self, pred: P) -> impl IntoStateMachine<In, Out>
+    where
+        Self: Sized,
+        Self: IntoStateMachine<In, Out>,
+        In: Clone,
+        P: Fn(In) -> bool;
+
+    fn seq<In, Out, SM>(self, machine: SM) -> impl IntoStateMachine<In, Out>
+    where
+        Self: Sized,
+        Self: IntoStateMachine<In, Out>,
+        SM: IntoStateMachine<In, Out>;
+}
+
+impl<M> StateMachineExt for M {
+    fn cascade<In, Out, O, SM>(self, sm: SM) -> impl IntoStateMachine<In, O>
+    where
+        Self: Sized,
+        SM: IntoStateMachine<Out, O>,
+        Self: IntoStateMachine<In, Out>,
     {
         Cascade {
-            first_machine: self,
-            second_machine: next_machine,
+            first_machine: self.into_state_machine(),
+            second_machine: sm.into_state_machine(),
+            _phantom: PhantomData,
         }
     }
-
-    fn parallel<SM2>(self, next_machine: SM2) -> Parallel<Self, SM2>
+    fn parallel<In, Out, SM, O>(self, next_machine: SM) -> impl IntoStateMachine<In, (Out, O)>
     where
+        In: Clone,
         Self: Sized,
-        SM2: StateMachine<Input>,
+        SM: IntoStateMachine<In, O>,
+        Self: IntoStateMachine<In, Out>,
     {
         Parallel {
-            machine1: self,
-            machine2: next_machine,
+            machine1: self.into_state_machine(),
+            machine2: next_machine.into_state_machine(),
         }
     }
 
-    fn parallel2<I2, SM2>(self, next_machine: SM2) -> Parallel2<Self, SM2>
+    // //     fn parallel2<I2, SM2>(self, next_machine: SM2) -> Parallel2<Self, SM2>
+    // //     where
+    // //         Self: Sized,
+    // //         I2: Clone,
+    // //         SM2: StateMachine<I2>,
+    // //     {
+    // //         Parallel2 {
+    // //             machine1: self,
+    // //             machine2: next_machine,
+    // //         }
+    // //     }
+
+    fn feedback<In>(self) -> impl IntoStateMachine<In, In>
     where
+        In: Clone,
         Self: Sized,
-        I2: Clone,
-        SM2: StateMachine<I2>,
+        Self: IntoStateMachine<In, In>,
     {
-        Parallel2 {
-            machine1: self,
-            machine2: next_machine,
+        Feedback {
+            machine: self.into_state_machine(),
         }
     }
 
-    fn feedback(self) -> Feedback<Self>
+    fn feedback2<In, Out>(self) -> impl IntoStateMachine<In, Out>
     where
         Self: Sized,
-    {
-        Feedback { machine: self }
-    }
-
-    fn feedback2(self) -> Feedback2<Self, Input>
-    where
-        Self: Sized,
+        Self: IntoStateMachine<(In, Out), Out>,
+        Out: Clone,
     {
         Feedback2 {
-            machine: self,
-            _phantom: PhantomData,
+            machine: self.into_state_machine(),
         }
     }
 
-    fn feedback_op<SM, Op>(self, machine: SM, op: Op) -> FeedbackOp<Self, SM, Op, Input>
-    where
-        Self: Sized,
-    {
-        FeedbackOp {
-            first_machine: self,
-            second_machine: machine,
-            op,
-            _phantom: PhantomData,
-        }
-    }
+    // //     fn feedback_op<SM, Op>(self, machine: SM, op: Op) -> FeedbackOp<Self, SM, Op, Input>
+    // //     where
+    // //         Self: Sized,
+    // //     {
+    // //         FeedbackOp {
+    // //             first_machine: self,
+    // //             second_machine: machine,
+    // //             op,
+    // //             _phantom: PhantomData,
+    // //         }
+    // //     }
 
-    fn switch<SM, P>(self, machine: SM, pred: P) -> Switch<Self, SM, P>
+    fn switch<In, Out, SM, P>(self, machine: SM, pred: P) -> impl IntoStateMachine<In, Out>
     where
         Self: Sized,
+        Self: IntoStateMachine<In, Out>,
+        SM: IntoStateMachine<In, Out>,
+        In: Clone,
+        P: Fn(In) -> bool,
     {
         Switch {
-            first_machine: self,
-            second_machine: machine,
+            first_machine: self.into_state_machine(),
+            second_machine: machine.into_state_machine(),
             pred,
         }
     }
 
-    fn mux<SM, P>(self, machine: SM, pred: P) -> Mux<Self, SM, P>
+    fn mux<In, Out, SM, P>(self, machine: SM, pred: P) -> impl IntoStateMachine<In, Out>
     where
         Self: Sized,
+        Self: IntoStateMachine<In, Out>,
+        SM: IntoStateMachine<In, Out>,
+        In: Clone,
+        P: Fn(In) -> bool,
     {
         Mux {
-            first_machine: self,
-            second_machine: machine,
+            first_machine: self.into_state_machine(),
+            second_machine: machine.into_state_machine(),
             pred,
         }
     }
 
-    fn r#if<SM, P>(self, machine: SM, pred: P) -> If<Self, SM, P>
+    fn r#if<In, Out, SM, P>(self, machine: SM, pred: P) -> impl IntoStateMachine<In, Out>
     where
         Self: Sized,
+        Self: IntoStateMachine<In, Out>,
+        SM: IntoStateMachine<In, Out>,
+        In: Clone,
+        P: Fn(In) -> bool,
     {
         If {
-            first_machine: self,
-            second_machine: machine,
+            first_machine: self.into_state_machine(),
+            second_machine: machine.into_state_machine(),
             pred,
         }
     }
 
-    fn seq<SM>(self, machine: SM) -> Seq<Self, SM>
+    fn seq<In, Out, SM>(self, machine: SM) -> impl IntoStateMachine<In, Out>
     where
         Self: Sized,
+        Self: IntoStateMachine<In, Out>,
+        SM: IntoStateMachine<In, Out>,
     {
         Seq {
-            first_machine: self,
-            second_machine: machine,
+            first_machine: self.into_state_machine(),
+            second_machine: machine.into_state_machine(),
         }
     }
 
-    fn repeat(self, n: Option<usize>) -> Repeat<Self>
+    fn repeat<In, Out>(self, n: Option<usize>) -> impl IntoStateMachine<In, Out>
     where
         Self: Sized,
+        Self: IntoStateMachine<In, Out>,
     {
-        Repeat { machine: self, n }
+        Repeat {
+            machine: self.into_state_machine(),
+            n,
+        }
     }
 
-    fn repeat_until<P>(self, pred: P) -> RepeatUntil<Self, P>
+    fn repeat_until<In, Out, P>(self, pred: P) -> impl IntoStateMachine<In, Out>
     where
         Self: Sized,
+        Self: IntoStateMachine<In, Out>,
+        In: Clone,
+        P: Fn(In) -> bool,
     {
         RepeatUntil {
-            machine: self,
+            machine: self.into_state_machine(),
             pred,
         }
     }
 
-    fn until<P>(self, pred: P) -> Until<Self, P>
+    fn until<In, Out, P>(self, pred: P) -> impl IntoStateMachine<In, Out>
     where
         Self: Sized,
+        Self: IntoStateMachine<In, Out>,
+        In: Clone,
+        P: Fn(In) -> bool,
     {
         Until {
-            machine: self,
+            machine: self.into_state_machine(),
             pred,
         }
     }
 }
 
-impl<I, O, F> StateMachine<I> for F
+pub trait IntoStateMachine<In, Out> {
+    fn into_state_machine(self) -> impl StateMachine<In, Out>;
+
+    fn into_state_full_machine(self) -> impl StateFullMachine<In, Out>
+    where
+        Self: Sized,
+    {
+        StateFull::new(self.into_state_machine())
+    }
+}
+
+// without specialization I can't do what I want (ie implelenting the IntoStateMachine for all S where S: StateMachine)
+// this impl will conflict with the impl for the Closure
+// impl<In, Out, SM> IntoStateMachine<In, Out> for (SM,)
+// where
+//     SM: StateMachine<In, Out>,
+// {
+//     fn into_state_machine(self) -> impl StateMachine<In, Out> {
+//         self.0
+//     }
+// }
+
+impl<In, Out, F> IntoStateMachine<In, Out> for F
 where
-    I: Clone,
-    F: Fn(I) -> O,
+    F: Fn(In) -> Out + 'static,
 {
-    type State = ();
-    type Output = O;
+    fn into_state_machine(self) -> impl StateMachine<In, Out> {
+        FnStateMachine::new(
+            move |state, input| {
+                if let Some(input) = input {
+                    let out = self(input);
+                    ((), Some(out))
+                } else {
+                    (state, None)
+                }
+            },
+            (),
+        )
+    }
+}
+
+impl<In, Out, S, F> IntoStateMachine<In, Out> for (F, S)
+where
+    S: Clone,
+    F: Fn(S, In) -> (S, Out) + 'static,
+{
+    fn into_state_machine(self) -> impl StateMachine<In, Out> {
+        FnStateMachine::with_done(
+            move |state, input| {
+                if let Some(input) = input {
+                    let (new_state, out) = (self.0)(state, input);
+                    (new_state, Some(out))
+                } else {
+                    (state, None)
+                }
+            },
+            |_| false,
+            self.1,
+        )
+    }
+}
+
+impl<In, Out, S, F, D> IntoStateMachine<In, Out> for (F, D, S)
+where
+    S: Clone,
+    F: Fn(S, In) -> (S, Out) + 'static,
+    D: Fn(S) -> bool + 'static,
+{
+    fn into_state_machine(self) -> impl StateMachine<In, Out> {
+        FnStateMachine::with_done(
+            move |state, input| {
+                if let Some(input) = input {
+                    let (new_state, out) = (self.0)(state, input);
+                    (new_state, Some(out))
+                } else {
+                    (state, None)
+                }
+            },
+            self.1,
+            self.2,
+        )
+    }
+}
+
+pub struct FnStateMachine<I, O, S, F, D> {
+    step_fn: F,
+    done_fn: D,
+    initial_state: S,
+    _phantom: PhantomData<(I, O, S)>,
+}
+
+impl<I, S, O, F> FnStateMachine<I, O, S, F, fn(S) -> bool>
+where
+    F: Fn(S, Option<I>) -> (S, Option<O>) + 'static,
+    S: Clone,
+{
+    pub fn new(step_fn: F, initial_state: S) -> Self {
+        FnStateMachine::with_done(step_fn, |_| false, initial_state)
+    }
+}
+
+impl<I, S, O, F, D> FnStateMachine<I, O, S, F, D>
+where
+    F: Fn(S, Option<I>) -> (S, Option<O>) + 'static,
+    D: Fn(S) -> bool,
+    S: Clone,
+{
+    pub fn with_done(step_fn: F, done_fn: D, initial_state: S) -> Self {
+        FnStateMachine {
+            step_fn,
+            done_fn,
+            initial_state,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<I, O, S, F, D> StateMachine<I, O> for FnStateMachine<I, O, S, F, D>
+where
+    F: Fn(S, Option<I>) -> (S, Option<O>),
+    D: Fn(S) -> bool,
+    S: Clone,
+{
+    type State = S;
 
     fn start_state(&self) -> Self::State {
-        ()
+        self.initial_state.clone()
     }
 
-    fn next_values(
-        &self,
-        _state: Self::State,
-        input: Option<I>,
-    ) -> (Self::State, Option<Self::Output>) {
-        ((), input.map(|input| self(input)))
+    fn next_values(&self, state: Self::State, input: Option<I>) -> (Self::State, Option<O>) {
+        (self.step_fn)(state, input)
+    }
+
+    fn done(&self, state: Self::State) -> bool {
+        (self.done_fn)(state)
     }
 }
 
@@ -259,14 +500,13 @@ pub struct Until<SM, P> {
     pred: P,
 }
 
-impl<I, SM, P> StateMachine<I> for Until<SM, P>
+impl<In, Out, SM, P> StateMachine<In, Out> for Until<SM, P>
 where
-    I: Clone,
-    SM: StateMachine<I>,
-    P: Fn(I) -> bool,
+    In: Clone,
+    SM: StateMachine<In, Out>,
+    P: Fn(In) -> bool,
 {
     type State = (SM::State, bool);
-    type Output = SM::Output;
 
     fn start_state(&self) -> Self::State {
         (self.machine.start_state(), false)
@@ -277,11 +517,7 @@ where
         self.machine.done(state) || done
     }
 
-    fn next_values(
-        &self,
-        state: Self::State,
-        input: Option<I>,
-    ) -> (Self::State, Option<Self::Output>) {
+    fn next_values(&self, state: Self::State, input: Option<In>) -> (Self::State, Option<Out>) {
         let (state, _) = state;
         let done = input
             .clone()
@@ -297,15 +533,13 @@ pub struct RepeatUntil<SM, P> {
     pred: P,
 }
 
-impl<I, SM, P> StateMachine<I> for RepeatUntil<SM, P>
+impl<In, Out, SM, P> StateMachine<In, Out> for RepeatUntil<SM, P>
 where
-    I: Clone,
-    SM: StateMachine<I>,
-    P: Fn(I) -> bool,
-    SM::State: Clone,
+    In: Clone,
+    SM: StateMachine<In, Out>,
+    P: Fn(In) -> bool,
 {
     type State = (SM::State, bool);
-    type Output = SM::Output;
 
     fn start_state(&self) -> Self::State {
         (self.machine.start_state(), false)
@@ -316,11 +550,7 @@ where
         self.machine.done(state) && done
     }
 
-    fn next_values(
-        &self,
-        state: Self::State,
-        input: Option<I>,
-    ) -> (Self::State, Option<Self::Output>) {
+    fn next_values(&self, state: Self::State, input: Option<In>) -> (Self::State, Option<Out>) {
         let (state, _) = state;
         let done = input
             .clone()
@@ -339,14 +569,12 @@ pub struct Repeat<SM> {
     n: Option<usize>,
 }
 
-impl<I, SM> StateMachine<I> for Repeat<SM>
+impl<In, Out, SM> StateMachine<In, Out> for Repeat<SM>
 where
-    I: Clone,
-    SM: StateMachine<I>,
+    SM: StateMachine<In, Out>,
     SM::State: Clone,
 {
     type State = (usize, SM::State);
-    type Output = SM::Output;
 
     fn start_state(&self) -> Self::State {
         (0, self.machine.start_state())
@@ -356,11 +584,7 @@ where
         self.n == Some(state.0)
     }
 
-    fn next_values(
-        &self,
-        state: Self::State,
-        input: Option<I>,
-    ) -> (Self::State, Option<Self::Output>) {
+    fn next_values(&self, state: Self::State, input: Option<In>) -> (Self::State, Option<Out>) {
         let (mut n, state) = state;
         let (mut new_s, out) = self.machine.next_values(state, input);
         if self.machine.done(new_s.clone()) && Some(n) != self.n {
@@ -386,16 +610,12 @@ pub struct Seq<SM1, SM2> {
     second_machine: SM2,
 }
 
-impl<I, SM1, SM2> StateMachine<I> for Seq<SM1, SM2>
+impl<In, Out, SM1, SM2> StateMachine<In, Out> for Seq<SM1, SM2>
 where
-    I: Clone,
-    SM1: StateMachine<I>,
-    SM2: StateMachine<I, Output = SM1::Output>,
-    SM1::State: Clone,
-    SM2::State: Clone,
+    SM1: StateMachine<In, Out>,
+    SM2: StateMachine<In, Out>,
 {
     type State = Either<SM1::State, SM2::State>;
-    type Output = SM1::Output;
 
     fn start_state(&self) -> Self::State {
         Either::Left(self.first_machine.start_state())
@@ -409,11 +629,7 @@ where
         }
     }
 
-    fn next_values(
-        &self,
-        mut state: Self::State,
-        input: Option<I>,
-    ) -> (Self::State, Option<Self::Output>) {
+    fn next_values(&self, mut state: Self::State, input: Option<In>) -> (Self::State, Option<Out>) {
         if let Either::Left(s1) = state {
             if !self.first_machine.done(s1.clone()) {
                 let (new_s1, out) = self.first_machine.next_values(s1, input);
@@ -440,25 +656,20 @@ pub struct If<SM1, SM2, P> {
     pred: P,
 }
 
-impl<I, SM1, SM2, P> StateMachine<I> for If<SM1, SM2, P>
+impl<In, Out, SM1, SM2, P> StateMachine<In, Out> for If<SM1, SM2, P>
 where
-    I: Clone,
-    P: Fn(I) -> bool,
-    SM1: StateMachine<I>,
-    SM2: StateMachine<I, Output = SM1::Output>,
+    In: Clone,
+    P: Fn(In) -> bool,
+    SM1: StateMachine<In, Out>,
+    SM2: StateMachine<In, Out>,
 {
     type State = Option<Either<SM1::State, SM2::State>>;
-    type Output = SM1::Output;
 
     fn start_state(&self) -> Self::State {
         None
     }
 
-    fn next_values(
-        &self,
-        state: Self::State,
-        input: Option<I>,
-    ) -> (Self::State, Option<Self::Output>) {
+    fn next_values(&self, state: Self::State, input: Option<In>) -> (Self::State, Option<Out>) {
         let state = match state {
             Some(state) => state,
             None => {
@@ -489,15 +700,14 @@ pub struct Mux<SM1, SM2, P> {
     pred: P,
 }
 
-impl<I, SM1, SM2, P> StateMachine<I> for Mux<SM1, SM2, P>
+impl<In, Out, SM1, SM2, P> StateMachine<In, Out> for Mux<SM1, SM2, P>
 where
-    I: Clone,
-    P: Fn(I) -> bool,
-    SM1: StateMachine<I>,
-    SM2: StateMachine<I, Output = SM1::Output>,
+    In: Clone,
+    P: Fn(In) -> bool,
+    SM1: StateMachine<In, Out>,
+    SM2: StateMachine<In, Out>,
 {
     type State = (SM1::State, SM2::State);
-    type Output = SM1::Output;
 
     fn start_state(&self) -> Self::State {
         (
@@ -506,11 +716,7 @@ where
         )
     }
 
-    fn next_values(
-        &self,
-        state: Self::State,
-        input: Option<I>,
-    ) -> (Self::State, Option<Self::Output>) {
+    fn next_values(&self, state: Self::State, input: Option<In>) -> (Self::State, Option<Out>) {
         let (s1, s2) = state;
         let (new_s1, out1) = self.first_machine.next_values(s1, input.clone());
         let (new_s2, out2) = self.second_machine.next_values(s2, input.clone());
@@ -524,21 +730,21 @@ where
         )
     }
 }
+
 pub struct Switch<SM1, SM2, P> {
     first_machine: SM1,
     second_machine: SM2,
     pred: P,
 }
 
-impl<I, SM1, SM2, P> StateMachine<I> for Switch<SM1, SM2, P>
+impl<In, Out, SM1, SM2, P> StateMachine<In, Out> for Switch<SM1, SM2, P>
 where
-    I: Clone,
-    P: Fn(I) -> bool,
-    SM1: StateMachine<I>,
-    SM2: StateMachine<I, Output = SM1::Output>,
+    In: Clone,
+    P: Fn(In) -> bool,
+    SM1: StateMachine<In, Out>,
+    SM2: StateMachine<In, Out>,
 {
     type State = (SM1::State, SM2::State);
-    type Output = SM1::Output;
 
     fn start_state(&self) -> Self::State {
         (
@@ -547,11 +753,7 @@ where
         )
     }
 
-    fn next_values(
-        &self,
-        state: Self::State,
-        input: Option<I>,
-    ) -> (Self::State, Option<Self::Output>) {
+    fn next_values(&self, state: Self::State, input: Option<In>) -> (Self::State, Option<Out>) {
         let (s1, s2) = state;
         if let Some(true) = input.clone().map(|input| (self.pred)(input)) {
             let (new_s1, out) = self.first_machine.next_values(s1, input);
@@ -562,74 +764,100 @@ where
         }
     }
 }
-pub struct FeedbackOp<SM1, SM2, Op, I> {
-    first_machine: SM1,
-    second_machine: SM2,
-    op: Op,
-    _phantom: PhantomData<I>,
-}
+// pub struct FeedbackOp<SM1, SM2, Op, I> {
+//     first_machine: SM1,
+//     second_machine: SM2,
+//     op: Op,
+//     _phantom: PhantomData<I>,
+// }
 
-impl<I, I1, SM1, SM2, Op> StateMachine<I> for FeedbackOp<SM1, SM2, Op, I1>
-where
-    I: Clone,
-    I1: Clone,
-    SM1::Output: Clone,
-    Op: Fn(I, SM2::Output) -> I1,
-    SM1: StateMachine<I1>,
-    SM2: StateMachine<SM1::Output>,
-    SM1::State: Clone,
-    SM2::State: Clone,
-{
-    type State = (SM1::State, SM2::State);
-    type Output = SM1::Output;
+// impl<I, I1, SM1, SM2, Op> StateMachine<I> for FeedbackOp<SM1, SM2, Op, I1>
+// where
+//     I: Clone,
+//     I1: Clone,
+//     SM1::Output: Clone,
+//     Op: Fn(I, SM2::Output) -> I1,
+//     SM1: StateMachine<I1>,
+//     SM2: StateMachine<SM1::Output>,
+//     SM1::State: Clone,
+//     SM2::State: Clone,
+// {
+//     type State = (SM1::State, SM2::State);
+//     type Output = SM1::Output;
 
-    fn start_state(&self) -> Self::State {
-        (
-            self.first_machine.start_state(),
-            self.second_machine.start_state(),
-        )
-    }
+//     fn start_state(&self) -> Self::State {
+//         (
+//             self.first_machine.start_state(),
+//             self.second_machine.start_state(),
+//         )
+//     }
 
-    fn next_values(
-        &self,
-        state: Self::State,
-        input: Option<I>,
-    ) -> (Self::State, Option<Self::Output>) {
-        let (_, output1) = self.first_machine.next_values(state.0.clone(), None);
-        let (new_state2, output2) = self
-            .second_machine
-            .next_values(state.1.clone(), output1.clone());
-        let (new_state1, _) = self
-            .first_machine
-            .next_values(state.0, input.zip(output2).map(|(i, i2)| (self.op)(i, i2)));
-        ((new_state1, new_state2), output1)
-    }
-}
+//     fn next_values(
+//         &self,
+//         state: Self::State,
+//         input: Option<I>,
+//     ) -> (Self::State, Option<Self::Output>) {
+//         let (_, output1) = self.first_machine.next_values(state.0.clone(), None);
+//         let (new_state2, output2) = self
+//             .second_machine
+//             .next_values(state.1.clone(), output1.clone());
+//         let (new_state1, _) = self
+//             .first_machine
+//             .next_values(state.0, input.zip(output2).map(|(i, i2)| (self.op)(i, i2)));
+//         ((new_state1, new_state2), output1)
+//     }
+// }
 
-pub struct Feedback2<SM, I> {
+// pub struct Parallel2<SM1, SM2> {
+//     machine1: SM1,
+//     machine2: SM2,
+// }
+
+// impl<I1, I2, SM1, SM2> StateMachine<(I1, I2)> for Parallel2<SM1, SM2>
+// where
+//     I1: Clone,
+//     I2: Clone,
+//     SM1: StateMachine<I1>,
+//     SM2: StateMachine<I2>,
+// {
+//     type State = (SM1::State, SM2::State);
+//     type Output = (SM1::Output, SM2::Output);
+
+//     fn start_state(&self) -> Self::State {
+//         (self.machine1.start_state(), self.machine2.start_state())
+//     }
+
+//     fn next_values(
+//         &self,
+//         state: Self::State,
+//         input: Option<(I1, I2)>,
+//     ) -> (Self::State, Option<Self::Output>) {
+//         let (i1, i2) = input.unzip();
+//         let (new_state1, output1) = self.machine1.next_values(state.0, i1);
+//         let (new_state2, output2) = self.machine2.next_values(state.1, i2);
+//         let new_state = (new_state1, new_state2);
+//         match (output1, output2) {
+//             (None, None) | (None, Some(_)) | (Some(_), None) => (new_state, None),
+//             (Some(o1), Some(o2)) => (new_state, Some((o1, o2))),
+//         }
+//     }
+// }
+pub struct Feedback2<SM> {
     machine: SM,
-    _phantom: PhantomData<I>,
 }
 
-impl<I1, I2, SM> StateMachine<I1> for Feedback2<SM, (I1, I2)>
+impl<In, Out, SM> StateMachine<In, Out> for Feedback2<SM>
 where
-    I1: Clone,
-    I2: Clone,
-    SM: StateMachine<(I1, I2), Output = I2>,
-    SM::State: Clone,
+    SM: StateMachine<(In, Out), Out>,
+    Out: Clone,
 {
     type State = SM::State;
-    type Output = SM::Output;
 
     fn start_state(&self) -> Self::State {
         self.machine.start_state()
     }
 
-    fn next_values(
-        &self,
-        state: Self::State,
-        input: Option<I1>,
-    ) -> (Self::State, Option<Self::Output>) {
+    fn next_values(&self, state: Self::State, input: Option<In>) -> (Self::State, Option<Out>) {
         let (_, output) = self.machine.next_values(state.clone(), None);
         let (new_state, _) = self.machine.next_values(state, input.zip(output.clone()));
         (new_state, output)
@@ -640,62 +868,21 @@ pub struct Feedback<SM> {
     machine: SM,
 }
 
-impl<I, SM> StateMachine<I> for Feedback<SM>
+impl<I, SM> StateMachine<I, I> for Feedback<SM>
 where
     I: Clone,
-    SM: StateMachine<I, Output = I>,
-    SM::State: Clone,
+    SM: StateMachine<I, I>,
 {
     type State = SM::State;
-    type Output = SM::Output;
 
     fn start_state(&self) -> Self::State {
         self.machine.start_state()
     }
 
-    fn next_values(
-        &self,
-        state: Self::State,
-        _input: Option<I>,
-    ) -> (Self::State, Option<Self::Output>) {
+    fn next_values(&self, state: Self::State, _input: Option<I>) -> (Self::State, Option<I>) {
         let (_, output) = self.machine.next_values(state.clone(), None);
         let (new_state, _) = self.machine.next_values(state, output.clone());
         (new_state, output)
-    }
-}
-
-pub struct Parallel2<SM1, SM2> {
-    machine1: SM1,
-    machine2: SM2,
-}
-
-impl<I1, I2, SM1, SM2> StateMachine<(I1, I2)> for Parallel2<SM1, SM2>
-where
-    I1: Clone,
-    I2: Clone,
-    SM1: StateMachine<I1>,
-    SM2: StateMachine<I2>,
-{
-    type State = (SM1::State, SM2::State);
-    type Output = (SM1::Output, SM2::Output);
-
-    fn start_state(&self) -> Self::State {
-        (self.machine1.start_state(), self.machine2.start_state())
-    }
-
-    fn next_values(
-        &self,
-        state: Self::State,
-        input: Option<(I1, I2)>,
-    ) -> (Self::State, Option<Self::Output>) {
-        let (i1, i2) = input.unzip();
-        let (new_state1, output1) = self.machine1.next_values(state.0, i1);
-        let (new_state2, output2) = self.machine2.next_values(state.1, i2);
-        let new_state = (new_state1, new_state2);
-        match (output1, output2) {
-            (None, None) | (None, Some(_)) | (Some(_), None) => (new_state, None),
-            (Some(o1), Some(o2)) => (new_state, Some((o1, o2))),
-        }
     }
 }
 
@@ -704,14 +891,13 @@ pub struct Parallel<SM1, SM2> {
     machine2: SM2,
 }
 
-impl<I, SM1, SM2> StateMachine<I> for Parallel<SM1, SM2>
+impl<In, Out1, Out2, SM1, SM2> StateMachine<In, (Out1, Out2)> for Parallel<SM1, SM2>
 where
-    I: Clone,
-    SM1: StateMachine<I>,
-    SM2: StateMachine<I>,
+    In: Clone,
+    SM1: StateMachine<In, Out1>,
+    SM2: StateMachine<In, Out2>,
 {
     type State = (SM1::State, SM2::State);
-    type Output = (SM1::Output, SM2::Output);
 
     fn start_state(&self) -> Self::State {
         (self.machine1.start_state(), self.machine2.start_state())
@@ -720,8 +906,8 @@ where
     fn next_values(
         &self,
         state: Self::State,
-        input: Option<I>,
-    ) -> (Self::State, Option<Self::Output>) {
+        input: Option<In>,
+    ) -> (Self::State, Option<(Out1, Out2)>) {
         let (new_state1, output1) = self.machine1.next_values(state.0, input.clone());
         let (new_state2, output2) = self.machine2.next_values(state.1, input);
         let new_state = (new_state1, new_state2);
@@ -732,20 +918,18 @@ where
     }
 }
 
-pub struct Cascade<SM1, SM2> {
+pub struct Cascade<SM1, SM2, O> {
     first_machine: SM1,
     second_machine: SM2,
+    _phantom: PhantomData<O>,
 }
 
-impl<I1, I2, SM1, SM2> StateMachine<I1> for Cascade<SM1, SM2>
+impl<In, O, Out, SM1, SM2> StateMachine<In, Out> for Cascade<SM1, SM2, O>
 where
-    I1: Clone,
-    I2: Clone,
-    SM1: StateMachine<I1, Output = I2>,
-    SM2: StateMachine<I2>,
+    SM1: StateMachine<In, O>,
+    SM2: StateMachine<O, Out>,
 {
     type State = (SM1::State, SM2::State);
-    type Output = SM2::Output;
 
     fn start_state(&self) -> Self::State {
         (
@@ -759,13 +943,46 @@ where
         self.first_machine.done(s1) || self.second_machine.done(s2)
     }
 
-    fn next_values(
-        &self,
-        state: Self::State,
-        input: Option<I1>,
-    ) -> (Self::State, Option<Self::Output>) {
+    fn next_values(&self, state: Self::State, input: Option<In>) -> (Self::State, Option<Out>) {
         let (new_state1, output1) = self.first_machine.next_values(state.0, input);
         let (new_state2, output2) = self.second_machine.next_values(state.1, output1);
         ((new_state1, new_state2), output2)
     }
+}
+
+#[macro_export]
+macro_rules! impl_into_state_machine {
+    (
+        $(
+            $(#[$meta:meta])*
+            $vis:vis struct $ty:ident $(<$($gen:tt),*>)?;
+        )*
+    ) => {
+        $(
+            $(#[$meta])*
+            impl<$($($gen),*,)? In, Out> IntoStateMachine<In, Out> for $ty $(<$($gen),*>)?
+            where
+                $ty<$($($gen),*,)?>: StateMachine<In, Out>,
+            {
+                fn into_state_machine(self) -> impl StateMachine<In, Out> {
+                    self
+                }
+            }
+        )*
+    }
+}
+
+impl_into_state_machine! {
+    pub struct Cascade<SM1, SM2, O>;
+    pub struct Parallel<SM1, SM2>;
+    pub struct Feedback<SM>;
+    pub struct Feedback2<SM>;
+    pub struct Switch<SM1, SM2, P>;
+    pub struct Mux<SM1, SM2, P>;
+    pub struct If<SM1, SM2, P>;
+    pub struct Repeat<SM>;
+    pub struct RepeatUntil<SM, P>;
+    pub struct Until<SM, P>;
+    pub struct Seq<SM1, SM2> ;
+    pub struct FnStateMachine<I, O, S, F, D> ;
 }
