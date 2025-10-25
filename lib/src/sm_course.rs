@@ -1,22 +1,35 @@
-use crate::sm::{FnStateMachine, IntoStateMachine};
+use crate::sm::StateMachine;
 
-pub fn delay<I: Clone>(val0: I) -> impl IntoStateMachine<I, I> {
-    FnStateMachine::new(|out, val0| (val0, out), Some(val0))
+struct Delay<I>(I);
+impl<I: Clone> StateMachine<I, I> for Delay<I> {
+    type State = Option<I>;
+
+    fn start_state(&self) -> Self::State {
+        Some(self.0.clone())
+    }
+
+    fn next_values(&self, state: Self::State, input: Option<I>) -> (Self::State, Option<I>) {
+        (input, state)
+    }
+}
+
+pub fn delay<I: Clone>(val0: I) -> impl StateMachine<I, I> {
+    Delay(val0)
 }
 
 #[cfg(test)]
 mod tests {
 
     use crate::{
-        sm::{FnStateMachine, IntoStateMachine, StateFullMachine, StateMachine, StateMachineExt},
+        sm::{StateFullMachine, StateMachine},
         sm_course::delay,
     };
 
-    fn make_incr<const I: i32>() -> impl IntoStateMachine<i32, i32> {
+    fn make_incr<const I: i32>() -> impl StateMachine<i32, i32> {
         |input| input + I
     }
 
-    fn make_acc() -> impl IntoStateMachine<i32, i32> {
+    fn make_acc() -> impl StateMachine<i32, i32> {
         (
             |state: i32, input: i32| {
                 let acc = state + input;
@@ -28,20 +41,30 @@ mod tests {
 
     #[test]
     fn it_works() {
-        fn make_delay_2<I: Clone>(val0: I, val1: I) -> impl IntoStateMachine<I, I> {
-            FnStateMachine::new(
-                |state, val1| {
-                    let (out, val0) = state;
-                    ((val0, val1), out)
-                },
-                (Some(val0), Some(val1)),
-            )
+        struct Delay2<I>(I, I);
+        impl<I: Clone> StateMachine<I, I> for Delay2<I> {
+            type State = (Option<I>, Option<I>);
+
+            fn start_state(&self) -> Self::State {
+                (Some(self.0.clone()), Some(self.1.clone()))
+            }
+
+            fn next_values(
+                &self,
+                (out, val0): Self::State,
+                val1: Option<I>,
+            ) -> (Self::State, Option<I>) {
+                ((val0, val1), out)
+            }
+        }
+
+        fn make_delay_2<I: Clone>(val0: I, val1: I) -> impl StateMachine<I, I> {
+            Delay2(val0, val1)
         }
 
         assert_eq!(
             &[100, 10, 1, 0, 2, 0, 0, 3, 0, 0],
             make_delay_2(100, 10)
-                .into_state_machine()
                 .transduce([1, 0, 2, 0, 0, 3, 0, 0, 0, 4])
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -49,7 +72,6 @@ mod tests {
         assert_eq!(
             &[10, 100, 0, 0, 0, 0, 0],
             make_delay_2(10, 100)
-                .into_state_machine()
                 .transduce([0, 0, 0, 0, 0, 0, 1])
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -57,7 +79,6 @@ mod tests {
         assert_eq!(
             &[-1, 0, 1, 2, -3, 1],
             make_delay_2(-1, 0)
-                .into_state_machine()
                 .transduce([1, 2, -3, 1, 2, -3])
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -65,7 +86,6 @@ mod tests {
         assert_eq!(
             &['a', 'b', 'c', 'd', 'e', 'f', 'g'],
             make_delay_2('a', 'b')
-                .into_state_machine()
                 .transduce(['c', 'd', 'e', 'f', 'g', 'i', 'j'])
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -77,7 +97,6 @@ mod tests {
         assert_eq!(
             &[1, 1, 3, 3, 3, 6, 6, 6, 6, 10],
             make_acc()
-                .into_state_machine()
                 .transduce([1, 0, 2, 0, 0, 3, 0, 0, 0, 4])
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -135,7 +154,7 @@ mod tests {
 
     #[test]
     fn test_average2() {
-        fn make_avg() -> impl IntoStateMachine<i32, f32> {
+        fn make_avg() -> impl StateMachine<i32, f32> {
             (
                 |state, input| {
                     let input = input as f32;
@@ -148,7 +167,6 @@ mod tests {
         assert_eq!(
             &[5.0, 7.5, 3.5, 6.0],
             make_avg()
-                .into_state_machine()
                 .transduce([10, 5, 2, 10])
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -161,7 +179,6 @@ mod tests {
             &[100, 10, 1, 0, 2, 0, 0, 3, 0, 0],
             delay(10)
                 .cascade(delay(100))
-                .into_state_machine()
                 .transduce([1, 0, 2, 0, 0, 3, 0, 0, 0, 4])
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -170,7 +187,6 @@ mod tests {
             &[10, 100, 0, 0, 0, 0, 0],
             delay(100)
                 .cascade(delay(10))
-                .into_state_machine()
                 .transduce([0, 0, 0, 0, 0, 0, 1])
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -179,7 +195,6 @@ mod tests {
             &[-1, 0, 1, 2, -3, 1],
             delay(0)
                 .cascade(delay(-1))
-                .into_state_machine()
                 .transduce([1, 2, -3, 1, 2, -3])
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -188,7 +203,6 @@ mod tests {
             &['a', 'b', 'c', 'd', 'e', 'f', 'g'],
             delay('b')
                 .cascade(delay('a'))
-                .into_state_machine()
                 .transduce(['c', 'd', 'e', 'f', 'g', 'i', 'j'])
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -200,7 +214,6 @@ mod tests {
         assert_eq!(
             &[2, 1, 3, 1, 1, 4, 1, 1, 1, 5],
             make_incr::<1>()
-                .into_state_machine()
                 .transduce([1, 0, 2, 0, 0, 3, 0, 0, 0, 4])
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -221,7 +234,6 @@ mod tests {
             ],
             make_incr::<1>()
                 .parallel(make_incr::<2>())
-                .into_state_machine()
                 .transduce([1, 0, 2, 0, 0, 3, 0, 0, 0, 4])
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -231,7 +243,6 @@ mod tests {
             make_incr::<1>()
                 .parallel(make_incr::<2>())
                 .cascade(|(i1, i2)| i1 + i2)
-                .into_state_machine()
                 .transduce([1, 0, 2, 0, 0, 3, 0, 0, 0, 4])
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -245,7 +256,6 @@ mod tests {
             make_incr::<1>()
                 .cascade(delay(0))
                 .feedback()
-                .into_state_machine()
                 .transduce(0..10)
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -257,7 +267,6 @@ mod tests {
         assert_eq!(
             &[4, 2, 0, -1],
             (|(i1, i2)| i1 + i2)
-                .into_state_machine()
                 .transduce([(1, 3), (0, 2), (0, 0), (3, -4)])
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -272,7 +281,6 @@ mod tests {
                 .parallel(delay(1).cascade(delay(0)))
                 .cascade(|(i1, i2)| i1 + i2)
                 .feedback()
-                .into_state_machine()
                 .transduce(0..10)
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -285,7 +293,6 @@ mod tests {
                 .cascade(|(i1, i2)| i1 + i2)
                 .cascade(delay(1))
                 .feedback()
-                .into_state_machine()
                 .transduce(0..10)
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -300,8 +307,7 @@ mod tests {
                 .parallel(|i| i * 1)
                 .cascade(|(i1, i2)| i1 * i2)
                 .cascade(delay(1))
-                .feedback()
-                .into_state_machine())
+                .feedback())
             .transduce(0..11)
             .collect::<Vec<_>>()
             .as_slice()
@@ -311,7 +317,6 @@ mod tests {
             &[1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024],
             (|_i: i32| 2)
                 .cascade((|(i1, i2)| i1 * i2).cascade(delay(1)).feedback2())
-                .into_state_machine()
                 .transduce(0..11)
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -348,7 +353,6 @@ mod tests {
             &[0, 3, 4, 9, 8, 15, 12, 21, 16, 27],
             (|i: i32| i * 2)
                 .switch(|i| i * 3, |i| i % 2 == 0)
-                .into_state_machine()
                 .transduce(0..10)
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -361,7 +365,6 @@ mod tests {
             &[0, 3, 4, 9, 8, 15, 12, 21, 16, 27],
             (|i: i32| i * 2)
                 .mux(|i| i * 3, |i| i % 2 == 0)
-                .into_state_machine()
                 .transduce(0..10)
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -374,7 +377,6 @@ mod tests {
             &[2, 5, 9, 200, 500, 900, 10, 12, 15],
             make_acc()
                 .switch(make_acc(), |i| i > 100)
-                .into_state_machine()
                 .transduce([2, 3, 4, 200, 300, 400, 1, 2, 3])
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -384,7 +386,6 @@ mod tests {
             &[2, 5, 9, 209, 509, 909, 910, 912, 915],
             make_acc()
                 .mux(make_acc(), |i| i > 100)
-                .into_state_machine()
                 .transduce([2, 3, 4, 200, 300, 400, 1, 2, 3])
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -397,7 +398,6 @@ mod tests {
             &[0, 2, 4, 6, 8, 10, 12, 14, 16, 18],
             (|i: i32| i * 2)
                 .r#if(|i| i * 3, |i| i % 2 == 0)
-                .into_state_machine()
                 .transduce(0..10)
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -406,14 +406,13 @@ mod tests {
             &[0, 3, 6, 9, 12, 15, 18, 21, 24, 27],
             (|i: i32| i * 2)
                 .r#if(|i| i * 3, |i| i % 2 != 0)
-                .into_state_machine()
                 .transduce(0..10)
                 .collect::<Vec<_>>()
                 .as_slice()
         );
     }
 
-    fn make_consume_five() -> impl IntoStateMachine<i32, Option<i32>> {
+    fn make_consume_five() -> impl StateMachine<i32, Option<i32>> {
         (
             |state: (i32, i32), input: i32| match state.0 {
                 s if s < 4 => ((state.0 + 1, state.1 + input), None),
@@ -452,14 +451,13 @@ mod tests {
         assert_eq!(
             &[None, None, None, None, Some(15)],
             make_consume_five()
-                .into_state_machine()
                 .transduce(1..10)
                 .collect::<Vec<_>>()
                 .as_slice()
         );
     }
 
-    fn make_char_tsm(c: char) -> impl IntoStateMachine<char, char> {
+    fn make_char_tsm(c: char) -> impl StateMachine<char, char> {
         (move |_state, _input| (true, c), |state| state, false)
     }
 
@@ -468,7 +466,6 @@ mod tests {
         assert_eq!(
             &['a'],
             make_char_tsm('a')
-                .into_state_machine()
                 .transduce(0..1)
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -477,7 +474,6 @@ mod tests {
             &['a', 'a', 'a', 'a'],
             make_char_tsm('a')
                 .repeat(Some(4))
-                .into_state_machine()
                 .run()
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -506,7 +502,6 @@ mod tests {
             ],
             make_consume_five()
                 .repeat_until(|i| i > 10)
-                .into_state_machine()
                 .transduce(0..20)
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -519,7 +514,6 @@ mod tests {
             &[None, None, None, None, Some(10),],
             make_consume_five()
                 .until(|i| i > 10)
-                .into_state_machine()
                 .transduce(0..20)
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -528,7 +522,6 @@ mod tests {
             &[None, None, None],
             make_consume_five()
                 .until(|i| i == 2)
-                .into_state_machine()
                 .transduce(0..20)
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -551,7 +544,6 @@ mod tests {
             make_consume_five()
                 .repeat(None)
                 .until(|i| i > 10)
-                .into_state_machine()
                 .transduce(0..20)
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -565,7 +557,6 @@ mod tests {
             make_char_tsm('a')
                 .seq(make_char_tsm('b'))
                 .seq(make_char_tsm('c'))
-                .into_state_machine()
                 .run()
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -574,7 +565,6 @@ mod tests {
         assert_eq!(
             &['a', 'b', 'c'],
             crate::seq!(make_char_tsm('a'), make_char_tsm('b'), make_char_tsm('c'))
-                .into_state_machine()
                 .run()
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -596,7 +586,6 @@ mod tests {
             ],
             make_text_sequence!('h', 'e', 'l', 'l', 'o')
                 .repeat(Some(3))
-                .into_state_machine()
                 .run()
                 .collect::<Vec<_>>()
                 .as_slice()
@@ -605,7 +594,7 @@ mod tests {
 
     #[test]
     fn exos() {
-        fn make_my_sm() -> impl IntoStateMachine<i32, i32> {
+        fn make_my_sm() -> impl StateMachine<i32, i32> {
             (
                 |state, input| {
                     let (count, acc) = state;
@@ -623,7 +612,6 @@ mod tests {
         assert_eq!(
             [1, 3, 6, 106, 4, 13, 513, 51, 49, 106],
             make_my_sm()
-                .into_state_machine()
                 .transduce([
                     1, 2, 3, 100, 4, 9, 500, 51, -2, 57, 103, 1, 1, 1, 1, -10, 207, 3, 1
                 ])
@@ -631,7 +619,7 @@ mod tests {
                 .as_slice()
         );
 
-        fn make_my_new_sm() -> impl IntoStateMachine<i32, i32> {
+        fn make_my_new_sm() -> impl StateMachine<i32, i32> {
             (
                 |state, input| {
                     let out = state + input;
@@ -645,7 +633,6 @@ mod tests {
             [1, 3, 6, 106, 4, 13, 513, 51, 49, 106],
             make_my_new_sm()
                 .repeat(Some(3))
-                .into_state_machine()
                 .transduce([
                     1, 2, 3, 100, 4, 9, 500, 51, -2, 57, 103, 1, 1, 1, 1, -10, 207, 3, 1
                 ])

@@ -1,6 +1,6 @@
 use crate::{
     io::{Action, Angle, Point, SensorInput},
-    sm::{IntoStateMachine, StateFullMachine, StateMachine, StateMachineExt},
+    sm::{StateFullMachine, StateMachine},
 };
 use safer_ffi::prelude::*;
 pub mod io;
@@ -91,8 +91,7 @@ fn sm_simple(_incr: f64) -> repr_c::Box<StateFullMachineOpaque<SensorInput, Acti
                         .until(|(goal, (position, _)): (Point, (Point, Angle))| {
                             position.is_near(goal, 0.02)
                         }),
-                )
-                .into_state_machine(),
+                ),
             }
             .into_state_full_machine(),
         ),
@@ -104,14 +103,6 @@ fn sm_simple(_incr: f64) -> repr_c::Box<StateFullMachineOpaque<SensorInput, Acti
 fn sm_step(sm: &'_ mut StateFullMachineOpaque<SensorInput, Action>, input: SensorInput) -> Action {
     sm.sfm.step(Some(input)).unwrap_or_default()
 }
-
-// #[ffi_export]
-// fn sm_run(
-//     sm: &'_ mut StateFullMachineOpaque<SensorInput, Action>,
-//     n: usize,
-// ) -> repr_c::Vec<Action> {
-//     sm.sfm.transduce(0..n).into()
-// }
 
 #[ffi_export]
 fn sm_is_done(sm: &'_ mut StateFullMachineOpaque<SensorInput, Action>) -> bool {
@@ -131,8 +122,4 @@ pub fn generate_headers() -> ::std::io::Result<()> {
         .with_language(Language::Python)
         .to_file(format!("{}.h", env!("CARGO_PKG_NAME")))?
         .generate()
-}
-
-impl_into_state_machine! {
-struct FollowFigure<SM> ;
 }
