@@ -17,84 +17,71 @@ where
     sfm: Box<dyn StateFullMachine<I, O>>,
 }
 
-fn rotate(input: (Point, (Point, Angle))) -> Action {
-    let (goal, (position, theta)) = input;
+fn rotate((goal, (position, theta)): (Point, (Point, Angle))) -> Action {
     Action {
         fvel: 0.0,
         rvel: 2.0 * (position.angle_to(goal) - theta).0,
     }
 }
 
-fn forward(input: (Point, (Point, Angle))) -> Action {
-    let (goal, (position, _)) = input;
+fn forward((goal, (position, _)): (Point, (Point, Angle))) -> Action {
     Action {
         fvel: 2.0 * position.distance(goal),
         rvel: 0.0,
     }
 }
 
-struct FollowFigure<SM> {
+struct FollowFigure {
     fig: Vec<Point>,
-    sm: SM,
 }
 
-impl<SM, In, Out> StateMachine<In, Out> for FollowFigure<SM>
-where
-    SM: StateMachine<(Point, In), Out>,
-{
-    type State = (usize, SM::State);
+impl StateMachine<Point, Point> for FollowFigure {
+    type State = usize;
 
     fn start_state(&self) -> Self::State {
-        (0, self.sm.start_state())
+        0
     }
 
     fn done(&self, state: Self::State) -> bool {
-        (state.0 == self.fig.len() - 1) && self.sm.done(state.1.clone())
+        state == self.fig.len()
     }
 
-    fn next_values(&self, state: Self::State, input: Option<In>) -> (Self::State, Option<Out>) {
-        let input = input.expect("no input");
-        let mut idx = state.0;
-        if self.sm.done(state.1.clone()) && idx < self.fig.len() - 1 {
+    fn next_values(
+        &self,
+        mut idx: Self::State,
+        input: Option<Point>,
+    ) -> (Self::State, Option<Point>) {
+        if input
+            .zip(self.fig.get(idx))
+            .map(|(p1, p2)| p1.is_near(p2.clone(), 0.02))
+            .unwrap_or(false)
+        {
             idx += 1;
         }
-        let (new_state, out) = self.sm.next_values(state.1, Some((self.fig[idx], input)));
-        ((idx, new_state), out)
+        (idx, self.fig.get(idx).cloned())
     }
 }
 
 #[ffi_export]
 fn sm_simple(_incr: f64) -> repr_c::Box<StateFullMachineOpaque<SensorInput, Action>> {
+    let dynamic_move_to_point = forward.switch(rotate, |(goal, (position, theta))| {
+        theta.is_near(position.angle_to(goal), 0.02)
+    });
+    let goal_generator = (|sensors: SensorInput| sensors.odometry.pos).cascade(FollowFigure {
+        fig: vec![
+            Point::new(0.5, 0.5),
+            Point::new(0.0, 1.0),
+            Point::new(-0.5, 0.5),
+            Point::new(0.0, 0.0),
+        ],
+    });
+
+    let sm = goal_generator
+        .parallel(|sensors: SensorInput| (sensors.odometry.pos, Angle::new(sensors.odometry.theta)))
+        .cascade(dynamic_move_to_point);
+
     Box::new(StateFullMachineOpaque {
-        sfm: Box::new(
-            FollowFigure {
-                fig: vec![
-                    Point::new(0.5, 0.5),
-                    Point::new(0.0, 1.0),
-                    Point::new(-0.5, 0.5),
-                    Point::new(0.0, 0.0),
-                ],
-                sm: (|(goal, sensors): (Point, SensorInput)| {
-                    (
-                        goal,
-                        (sensors.odometry.pos, Angle::new(sensors.odometry.theta)),
-                    )
-                })
-                .cascade(
-                    forward
-                        .switch(
-                            rotate,
-                            |(goal, (position, theta)): (Point, (Point, Angle))| {
-                                theta.is_near(position.angle_to(goal), 0.02)
-                            },
-                        )
-                        .until(|(goal, (position, _)): (Point, (Point, Angle))| {
-                            position.is_near(goal, 0.02)
-                        }),
-                ),
-            }
-            .into_state_full_machine(),
-        ),
+        sfm: Box::new(sm.into_state_full_machine()),
     })
     .into()
 }
