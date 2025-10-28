@@ -59,6 +59,10 @@ where
     }
 }
 
+pub fn constant(val: f64) -> impl Signal<Out = f64> {
+    move |_| val
+}
+
 pub fn unit() -> impl Signal<Out = f64> {
     |n| if n == 0 { 1.0 } else { 0.0 }
 }

@@ -1,1 +1,1 @@
-LD_LIBRARY_PATH=/course/brains soar
+PYTHONPATH=/course/lab LD_LIBRARY_PATH=/course/lab soar

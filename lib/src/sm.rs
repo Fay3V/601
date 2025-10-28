@@ -76,7 +76,7 @@ pub trait StateMachine<In, Out> {
     fn transduce_signal<Sg: Signal<Out = In>>(self, mut input_sig: Sg) -> impl Signal<Out = Out>
     where
         Self: Sized,
-        Out: Default,
+        Out: Default + std::fmt::Debug,
     {
         let mut last_values = None;
         move |n| {
@@ -94,7 +94,7 @@ pub trait StateMachine<In, Out> {
                     out = o;
                 }
                 last_values = Some((n, state));
-                out.expect("no output")
+                dbg!(out.expect("no output"))
             }
         }
     }

@@ -10,7 +10,11 @@
 typedef ... SignalOpaque_f64_t;
 
 SignalOpaque_f64_t *
-sig (void);
+sig (
+    double t,
+    double init_d,
+    double k,
+    double desired_d);
 
 SignalOpaque_f64_t *
 sig_cos (
@@ -27,6 +31,12 @@ sig_unit (void);
 
 typedef ... StateFullMachineOpaque_SensorInput_Action_t;
 
+StateFullMachineOpaque_SensorInput_Action_t *
+sm (
+    double init_d,
+    double desired_d,
+    double k);
+
 bool
 sm_is_done (
     StateFullMachineOpaque_SensorInput_Action_t * sm);
@@ -34,10 +44,6 @@ sm_is_done (
 void
 sm_reset (
     StateFullMachineOpaque_SensorInput_Action_t * sm);
-
-StateFullMachineOpaque_SensorInput_Action_t *
-sm_simple (
-    double _incr);
 
 typedef struct {
     double idx[8];

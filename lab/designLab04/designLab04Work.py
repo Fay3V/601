@@ -1,22 +1,10 @@
-import lib601.sig  as sig # Signal
-import lib601.ts as ts  # TransducedSignal
-import lib601.sm as sm  # SM
+
+from dsignal import Signal, lib
 
 ######################################################################
 ##  Make a state machine model using primitives and combinators
 ######################################################################
 
-def plant(T, initD):
-    pass
-
-def controller(k):
-    pass
-
-def sensor(initD):
-    pass
-
-def wallFinderSystem(T, initD, k):
-    pass
 
 # Plots the sequence of distances when the robot starts at distance
 # initD from the wall, and desires to be at distance 0.7 m.  Time step
@@ -25,8 +13,13 @@ def wallFinderSystem(T, initD, k):
 
 initD = 1.5
 
-def plotD(k, end = 50):
-  d = ts.TransducedSignal(sig.ConstantSignal(0.7),
-                          wallFinderSystem(0.1, initD, k))
-  d.plot(0, end, newWindow = 'Gain '+str(k))
+
+def plot(k, end = 50):
+	d = Signal(lib.sig(0.1, initD, k, 0.7))
+	d.plot(0, end, newWindow = 'Gain ' +str(k))
+
+# def plotD(k, end = 50):
+#   d = ts.TransducedSignal(sig.ConstantSignal(0.7),
+#                           wallFinderSystem(0.1, initD, k))
+#   d.plot(0, end, newWindow = 'Gain '+str(k))
 

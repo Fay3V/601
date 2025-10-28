@@ -55,6 +55,13 @@ pub struct Action {
     pub rvel: f64,
     // voltage: f64,
 }
+
+impl Action {
+    pub fn foward(fvel: f64) -> Self {
+        Self { fvel, rvel: 0.0 }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Angle(pub(crate) f64);
 
