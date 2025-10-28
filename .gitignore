@@ -3,3 +3,4 @@ python-files
 lab/*.zip
 lab/*.tar.gz
 
+tmp/*

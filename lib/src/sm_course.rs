@@ -1,3 +1,5 @@
+use std::ops::Mul;
+
 use crate::sm::StateMachine;
 
 struct Delay<I>(I);
@@ -17,13 +19,22 @@ pub fn delay<I: Clone>(val0: I) -> impl StateMachine<I, I> {
     Delay(val0)
 }
 
+pub fn wire<I>() -> impl StateMachine<I, I> {
+    |input| input
+}
+
+pub fn scale<I: Mul<I, Output = I> + Clone + 'static>(gain: I) -> impl StateMachine<I, I> {
+    move |input| gain.clone() * input
+}
+
 #[cfg(test)]
 mod tests {
-
     use crate::{
+        sig::IterSignal,
         sm::{StateFullMachine, StateMachine},
-        sm_course::delay,
+        sm_course::{delay, wire},
     };
+    use std::ops::Add;
 
     fn make_incr<const I: i32>() -> impl StateMachine<i32, i32> {
         |input| input + I
@@ -323,29 +334,29 @@ mod tests {
         );
     }
 
-    //     //     #[test]
-    //     //     fn test_feedback_op() {
-    //     //         assert_eq!(
-    //     //             &[0, 0, 1, 3, 6, 10, 15, 21, 28, 36],
-    //     //             Delay::new(0)
-    //     //                 .feedback_op(|i| i * 1, |i1, i2| i1 + i2)
-    //     //                 .into_state_full()
-    //     //                 .transduce(0..10)
-    //     //                 .as_slice()
-    //     //         );
+    #[test]
+    fn test_feedback_op() {
+        // acc
+        assert_eq!(
+            &[0, 0, 1, 3, 6, 10, 15, 21, 28, 36],
+            delay(0)
+                .feedback_op(|i| i * 1, |i1: i32, i2| i1 + i2)
+                .transduce(0..10)
+                .collect::<Vec<_>>()
+                .as_slice()
+        );
 
-    //     //         let fac = Delay::new(1).feedback_op(|i| i * 1, |i1, i2| i1 * i2);
-    //     //         // let counter = Incr::<1>.cascade(Delay::new(1)).feedback();
-    //     //         let counter = Delay::new(1).feedback_op(|i| i * 1, |i1, i2| i1 + i2);
-    //     //         assert_eq!(
-    //     //             &[1, 1, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800],
-    //     //             counter
-    //     //                 .cascade(fac)
-    //     //                 .into_state_full()
-    //     //                 .transduce(std::iter::repeat(1).take(11))
-    //     //                 .as_slice()
-    //     //         );
-    //     //     }
+        let fac = delay(1).feedback_op(|i| i * 1, |i1, i2| i1 * i2);
+        let counter = delay(1).feedback_op(|i| i * 1, |i1: i32, i2| i1 + i2);
+        assert_eq!(
+            &[1, 1, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800],
+            counter
+                .cascade(fac)
+                .transduce(std::iter::repeat(1).take(11))
+                .collect::<Vec<_>>()
+                .as_slice()
+        );
+    }
 
     #[test]
     fn test_switch() {
@@ -636,6 +647,18 @@ mod tests {
                 .transduce([
                     1, 2, 3, 100, 4, 9, 500, 51, -2, 57, 103, 1, 1, 1, 1, -10, 207, 3, 1
                 ])
+                .collect::<Vec<_>>()
+                .as_slice()
+        );
+    }
+
+    #[test]
+    fn test_transduce_signal() {
+        let acc = (wire()).feedback_op(delay(0), i32::add);
+        assert_eq!(
+            &[1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            IterSignal::new(acc.transduce_signal(|n| if n == 0 { 1 } else { 0 }))
+                .take(10)
                 .collect::<Vec<_>>()
                 .as_slice()
         );

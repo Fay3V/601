@@ -7,6 +7,24 @@
  *                                         *
  *******************************************/
 
+typedef ... SignalOpaque_f64_t;
+
+SignalOpaque_f64_t *
+sig (void);
+
+SignalOpaque_f64_t *
+sig_cos (
+    double omega,
+    double theta);
+
+double
+sig_sample (
+    SignalOpaque_f64_t * s,
+    int32_t n);
+
+SignalOpaque_f64_t *
+sig_unit (void);
+
 typedef ... StateFullMachineOpaque_SensorInput_Action_t;
 
 bool

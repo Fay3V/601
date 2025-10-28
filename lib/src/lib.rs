@@ -1,9 +1,13 @@
 use crate::{
     io::{Action, Angle, Point, SensorInput},
+    sig::Signal,
     sm::{StateFullMachine, StateMachine},
+    sm_course::{delay, scale, wire},
 };
 use safer_ffi::prelude::*;
+use std::ops::{Add, Mul};
 pub mod io;
+pub mod sig;
 pub mod sm;
 pub mod sm_course;
 
@@ -99,6 +103,47 @@ fn sm_is_done(sm: &'_ mut StateFullMachineOpaque<SensorInput, Action>) -> bool {
 #[ffi_export]
 fn sm_reset(sm: &'_ mut StateFullMachineOpaque<SensorInput, Action>) {
     sm.sfm.reset()
+}
+
+#[derive_ReprC]
+#[repr(opaque)]
+pub struct SignalOpaque<O>
+where
+    O: ReprC,
+{
+    sig: Box<dyn Signal<Out = O>>,
+}
+
+#[ffi_export]
+fn sig_unit() -> repr_c::Box<SignalOpaque<f64>> {
+    Box::new(SignalOpaque {
+        sig: Box::new(sig::unit()),
+    })
+    .into()
+}
+
+#[ffi_export]
+fn sig_cos(omega: f64, theta: f64) -> repr_c::Box<SignalOpaque<f64>> {
+    Box::new(SignalOpaque {
+        sig: Box::new(sig::cosine(omega, theta)),
+    })
+    .into()
+}
+
+#[ffi_export]
+fn sig() -> repr_c::Box<SignalOpaque<f64>> {
+    let sm = delay(0.0)
+        .parallel(scale(-1.0).cascade(delay(0.0)).cascade(delay(0.0)))
+        .cascade(|(f1, f2)| f1 + f2);
+    Box::new(SignalOpaque {
+        sig: Box::new(sm.transduce_signal(sig::unit())),
+    })
+    .into()
+}
+
+#[ffi_export]
+fn sig_sample(s: &'_ mut SignalOpaque<f64>, n: i32) -> f64 {
+    s.sig.sample(n)
 }
 
 #[cfg(feature = "headers")]

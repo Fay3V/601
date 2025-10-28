@@ -1,5 +1,7 @@
 use std::marker::PhantomData;
 
+use crate::sig::Signal;
+
 #[derive(Debug, Clone)]
 pub enum Either<L, R> {
     Left(L),
@@ -71,6 +73,32 @@ pub trait StateMachine<In, Out> {
         })
     }
 
+    fn transduce_signal<Sg: Signal<Out = In>>(self, mut input_sig: Sg) -> impl Signal<Out = Out>
+    where
+        Self: Sized,
+        Out: Default,
+    {
+        let mut last_values = None;
+        move |n| {
+            if n < 0 {
+                Out::default()
+            } else {
+                let (idx, mut state) = match last_values.take() {
+                    Some((last_n, last_state)) if last_n < n => (last_n + 1, last_state),
+                    _ => (0, self.start_state()),
+                };
+                let mut out = None;
+                for i in idx..=n {
+                    let (next_state, o) = self.next_values(state, Some(input_sig.sample(i)));
+                    state = next_state;
+                    out = o;
+                }
+                last_values = Some((n, state));
+                out.expect("no output")
+            }
+        }
+    }
+
     fn run(&self) -> impl Iterator<Item = Out>
     where
         In: Default,
@@ -132,6 +160,18 @@ pub trait StateMachine<In, Out> {
         Out: Clone,
     {
         Feedback2 { machine: self }
+    }
+
+    fn feedback_op<SM, Op, Out2>(self, machine: SM, op: Op) -> FeedbackOp<Self, SM, Op, In, Out2>
+    where
+        Self: Sized,
+    {
+        FeedbackOp {
+            first_machine: self,
+            second_machine: machine,
+            op,
+            _phantom: PhantomData,
+        }
     }
 
     fn switch<SM, P>(self, machine: SM, pred: P) -> Switch<Self, SM, P>
@@ -621,6 +661,46 @@ where
         let (_, output) = self.machine.next_values(state.clone(), None);
         let (new_state, _) = self.machine.next_values(state, output.clone());
         (new_state, output)
+    }
+}
+
+pub struct FeedbackOp<SM1, SM2, Op, I, O> {
+    first_machine: SM1,
+    second_machine: SM2,
+    op: Op,
+    _phantom: PhantomData<(I, O)>,
+}
+
+impl<In, Out, In1, Out2, SM1, SM2, Op> StateMachine<In, Out> for FeedbackOp<SM1, SM2, Op, In1, Out2>
+where
+    Out: Clone,
+    Op: Fn(In, Out2) -> In1,
+    SM1: StateMachine<In1, Out>,
+    SM2: StateMachine<Out, Out2>,
+    SM1::State: Clone,
+    SM2::State: Clone,
+{
+    type State = (SM1::State, SM2::State);
+    fn start_state(&self) -> Self::State {
+        (
+            self.first_machine.start_state(),
+            self.second_machine.start_state(),
+        )
+    }
+
+    fn done(&self, (s1, s2): Self::State) -> bool {
+        self.first_machine.done(s1) || self.second_machine.done(s2)
+    }
+
+    fn next_values(&self, state: Self::State, input: Option<In>) -> (Self::State, Option<Out>) {
+        let (s1, s2) = state;
+        let (_, o1) = self.first_machine.next_values(s1.clone(), None);
+        let (_, o2) = self.second_machine.next_values(s2.clone(), o1);
+        let (new_s1, output) = self
+            .first_machine
+            .next_values(s1, input.zip(o2).map(|(i, i2)| (self.op)(i, i2)));
+        let (new_s2, _) = self.second_machine.next_values(s2, output.clone());
+        ((new_s1, new_s2), output)
     }
 }
 
