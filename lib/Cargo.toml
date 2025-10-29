@@ -9,7 +9,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 safer-ffi = { path = "/home/adiallo/wks/rust/safer_ffi"}
 rand = "0.9"
-# ouroboros = "0.18"
+faer = "0.23"
 
 
 [features]

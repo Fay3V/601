@@ -7,6 +7,8 @@ use crate::{
 use safer_ffi::prelude::*;
 use std::ops::Add;
 pub mod io;
+pub mod poly;
+pub mod sf;
 pub mod sig;
 pub mod sm;
 pub mod sm_course;
