@@ -95,6 +95,7 @@ pub trait StateMachine<In, Out> {
                 }
                 last_values = Some((n, state));
                 dbg!(out.expect("no output"))
+                // out.expect("no output")
             }
         }
     }

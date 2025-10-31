@@ -11,7 +11,6 @@ typedef ... SignalOpaque_f64_t;
 
 SignalOpaque_f64_t *
 sig (
-    double t,
     double init_d,
     double k,
     double desired_d);
@@ -33,7 +32,6 @@ typedef ... StateFullMachineOpaque_SensorInput_Action_t;
 
 StateFullMachineOpaque_SensorInput_Action_t *
 sm (
-    double init_d,
     double desired_d,
     double k);
 

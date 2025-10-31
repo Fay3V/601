@@ -1,17 +1,22 @@
 use crate::{
-    io::{Action, SensorInput},
+    io::{Action, Angle, SensorInput},
+    sf::SystemFunction,
     sig::{Signal, constant},
     sm::{StateFullMachine, StateMachine},
-    sm_course::{delay, scale, wire},
+    sonars::get_distance_right,
 };
 use safer_ffi::prelude::*;
-use std::ops::Add;
+use std::cell::Cell;
 pub mod io;
+
 pub mod poly;
+
 pub mod sf;
+
 pub mod sig;
 pub mod sm;
 pub mod sm_course;
+pub mod sonars;
 
 #[derive_ReprC]
 #[repr(opaque)]
@@ -23,27 +28,47 @@ where
     sfm: Box<dyn StateFullMachine<I, O>>,
 }
 
-fn controller(desired_d: f64, k: f64) -> impl StateMachine<f64, Action> {
-    (move |ds: f64| desired_d - ds)
-        .cascade(scale(k))
-        .cascade(|fvel| dbg!(Action::foward(fvel)))
+const V: f64 = 0.1;
+const T: f64 = 0.1;
+
+fn controller(desired_d: f64, k: f64) -> impl StateMachine<(u32, f64), Action> {
+    (move |(steps, ds): (u32, f64)| (steps, desired_d - ds))
+        .cascade(move |(steps, err)| {
+            eprintln!("err[{}]={err}", steps);
+            (steps, k * err)
+        })
+        .cascade(|(steps, rvel)| {
+            eprintln!("w[{}]={rvel}", steps);
+            Action { fvel: V, rvel }
+        })
 }
 
-fn sensor(init_d: f64) -> impl StateMachine<SensorInput, f64> {
-    (|sensors: SensorInput| sensors.sonars[3]).cascade(delay(init_d))
+fn sensor() -> impl StateMachine<(u32, SensorInput), (u32, f64)> {
+    |(steps, sensors): (u32, SensorInput)| {
+        let dist = get_distance_right(&sensors.sonars);
+        eprintln!("do[{}]={dist}", steps - 1);
+        eprintln!(
+            "theta[{}]={}",
+            steps - 1,
+            Angle::new(sensors.odometry.theta).0
+        );
+        (steps, dist)
+    }
 }
 
 #[ffi_export]
-fn sm(
-    init_d: f64,
-    desired_d: f64,
-    k: f64,
-) -> repr_c::Box<StateFullMachineOpaque<SensorInput, Action>> {
+fn sm(desired_d: f64, k: f64) -> repr_c::Box<StateFullMachineOpaque<SensorInput, Action>> {
+    dbg!((desired_d, k));
+    let steps = Cell::new(0);
     Box::new(StateFullMachineOpaque {
         sfm: Box::new(
-            sensor(init_d)
-                .cascade(controller(desired_d, k))
-                .into_state_full_machine(),
+            (move |input| {
+                let s = steps.get() + 1;
+                steps.set(s);
+                (s, input)
+            })
+            .cascade(sensor().cascade(controller(desired_d, k)))
+            .into_state_full_machine(),
         ),
     })
     .into()
@@ -89,30 +114,41 @@ fn sig_cos(omega: f64, theta: f64) -> repr_c::Box<SignalOpaque<f64>> {
     .into()
 }
 
+pub fn wall_follower_model(k: f64, t: f64, v: f64) -> SystemFunction {
+    // let numerator = Poly::new([k * v * t * t, 0.0, 0.0]);
+    // let denominator = Poly::new([1.0 + k * v * t * t, -2.0, 1.0]);
+    // let sf = SystemFunction::new(numerator, denominator);
+    // println!("1: {sf}");
+    // println!("===============================");
+
+    let controller = sf::gain(k);
+    let plant1 = sf::gain(t)
+        .cascade(sf::delay())
+        .cascade(sf::gain(1.0).feedback_add(Some(sf::delay())));
+    let plant2 = sf::gain(v * t)
+        .cascade(sf::delay())
+        .cascade(sf::gain(1.0).feedback_add(Some(sf::delay())));
+    let sf = controller
+        .cascade(plant1)
+        .cascade(plant2)
+        .feedback_sub(None);
+    // println!("2: {sf}");
+    sf
+}
+
 #[ffi_export]
-fn sig(t: f64, init_d: f64, k: f64, desired_d: f64) -> repr_c::Box<SignalOpaque<f64>> {
-    fn sm_controller(k: f64) -> impl StateMachine<f64, f64> {
-        scale(k)
-    }
-
-    fn sm_plant(t: f64, init_d: f64) -> impl StateMachine<f64, f64> {
-        delay(0.0)
-            .cascade(scale(-t))
-            .cascade(wire().feedback_op(delay(init_d), f64::add))
-    }
-
-    fn sm_sensor(init_d: f64) -> impl StateMachine<f64, f64> {
-        delay(init_d)
-    }
-
-    fn sm_wall_finder(t: f64, init_d: f64, k: f64) -> impl StateMachine<f64, f64> {
-        sm_controller(k)
-            .cascade(sm_plant(t, init_d))
-            .feedback_op(sm_sensor(init_d), |f1, f2| f1 - f2)
-    }
-
+fn sig(init_d: f64, k: f64, desired_d: f64) -> repr_c::Box<SignalOpaque<f64>> {
     Box::new(SignalOpaque {
-        sig: Box::new(sm_wall_finder(t, init_d, k).transduce_signal(constant(desired_d))),
+        sig: Box::new(
+            wall_follower_model(k, T, V)
+                .into_sm(
+                    Some(vec![desired_d, desired_d]),
+                    // Some(vec![0.5004870506048704, 0.5031447799628332]),
+                    Some(vec![0.5034640638578065, 0.49970114809773036]),
+                    // Some(vec![0.50, 0.5031447799628332]),
+                )
+                .transduce_signal(constant(desired_d)),
+        ),
     })
     .into()
 }

@@ -8,10 +8,9 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 safer-ffi = { path = "/home/adiallo/wks/rust/safer_ffi"}
-rand = "0.9"
-faer = "0.23"
-
+faer = {version = "0.23", optional = true }
 
 [features]
-default = []
+default = ["poles"]
 headers = ["safer-ffi/headers", "safer-ffi/python-headers"]
+poles = ["dep:faer"]

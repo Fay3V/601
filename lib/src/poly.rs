@@ -4,11 +4,8 @@ use std::{
     ops::{Add, Mul, Sub},
 };
 
-use faer::{
-    Mat,
-    complex::Complex,
-    traits::num_traits::{One, Zero},
-};
+#[cfg(feature = "poles")]
+use faer::{Mat, complex::Complex};
 
 #[derive(Clone)]
 pub struct Poly {
@@ -24,7 +21,7 @@ impl<'a, const V: char> Display for DispPoly<'a, V> {
             .coeffs
             .iter()
             .enumerate()
-            .filter(|(_, coef)| !coef.is_zero())
+            .filter(|(_, coef)| **coef != 0.0)
         {
             let n = self.0.coeffs.len();
             let coef = if deg != 0 {
@@ -45,13 +42,13 @@ impl<'a, const V: char> Display for DispPoly<'a, V> {
             match n - deg - 1 {
                 0 => write!(f, "{coef}")?,
                 1 => {
-                    if !coef.is_one() {
+                    if coef != 1.0 {
                         write!(f, "{coef}")?
                     }
                     write!(f, "{V}")?
                 }
                 deg => {
-                    if !coef.is_one() {
+                    if coef != 1.0 {
                         write!(f, "{coef}")?
                     }
                     write!(f, "{V}^{deg}")?
@@ -64,16 +61,21 @@ impl<'a, const V: char> Display for DispPoly<'a, V> {
 
 impl Poly {
     pub fn new<const N: usize>(coeffs: [f64; N]) -> Self {
-        assert!(!coeffs[0].is_zero(), "zero poly is not supported");
+        assert!(coeffs[0] != 0.0, "zero poly is not supported");
         assert!(N != 0);
         Self {
             coeffs: coeffs.into(),
         }
     }
+
     pub fn from_vec(coeffs: Vec<f64>) -> Self {
-        assert!(!coeffs[0].is_zero(), "zero poly is not supported");
+        assert!(coeffs[0] != 0.0, "zero poly is not supported");
         assert!(coeffs.len() != 0);
         Self { coeffs }
+    }
+
+    pub fn coeffs(self) -> Vec<f64> {
+        self.coeffs
     }
 
     pub fn reciprocal(&self) -> Poly {
@@ -85,6 +87,7 @@ impl Poly {
         Poly { coeffs }
     }
 
+    #[cfg(feature = "poles")]
     pub fn roots(&self) -> Vec<Complex<f64>> {
         // Build the companion matrix (n-1 x n-1)
         let n = self.coeffs.len();

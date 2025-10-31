@@ -1,5 +1,10 @@
-use crate::poly::{DispPoly, Poly};
+use crate::{
+    poly::{DispPoly, Poly},
+    sm::StateMachine,
+};
+#[cfg(feature = "poles")]
 use faer::complex::Complex;
+
 use std::{fmt::Display, ops::Deref};
 
 #[derive(Debug)]
@@ -41,13 +46,6 @@ pub enum Pole {
 }
 
 impl Pole {
-    fn into_parts(self) -> (f64, f64) {
-        match self {
-            Pole::Real(re) => (re, 0.0),
-            Pole::Complex(re, im) => (re, im),
-        }
-    }
-
     pub fn magnitude(&self) -> f64 {
         match self {
             Pole::Real(r) => r.abs(),
@@ -56,6 +54,7 @@ impl Pole {
     }
 }
 
+#[cfg(feature = "poles")]
 impl From<Complex<f64>> for Pole {
     fn from(value: Complex<f64>) -> Self {
         if value.im == 0.0 {
@@ -131,6 +130,7 @@ impl Display for SystemFunction {
     }
 }
 impl SystemFunction {
+    #[cfg(feature = "poles")]
     pub fn poles(&self) -> Poles {
         self.denominator
             .reciprocal()
@@ -140,6 +140,124 @@ impl SystemFunction {
             .collect::<Vec<_>>()
             .into()
     }
+    pub fn into_sm(
+        self,
+        prev_inputs: Option<Vec<f64>>,
+        prev_outputs: Option<Vec<f64>>,
+    ) -> impl StateMachine<f64, f64> {
+        LTSIM::from_sf(self, prev_inputs, prev_outputs)
+    }
+}
+
+pub fn gain(k: f64) -> SystemFunction {
+    SystemFunction {
+        numerator: Poly::new([k]),
+        denominator: Poly::new([1.0]),
+    }
+}
+
+pub fn delay() -> SystemFunction {
+    SystemFunction {
+        numerator: Poly::new([1.0, 0.0]),
+        denominator: Poly::new([1.0]),
+    }
+}
+
+struct LTSIM {
+    c_coeffs: Vec<f64>,
+    d_coeffs: Vec<f64>,
+    prev_inputs: Vec<f64>,
+    prev_outputs: Vec<f64>,
+}
+
+impl LTSIM {
+    fn new(
+        c_coeffs: Vec<f64>,
+        d_coeffs: Vec<f64>,
+        prev_inputs: Option<Vec<f64>>,
+        prev_outputs: Option<Vec<f64>>,
+    ) -> Self {
+        let j = d_coeffs.len();
+        let k = c_coeffs.len();
+        let prev_inputs = prev_inputs
+            .map(|mut v| {
+                if v.len() >= j {
+                    v.drain(j..);
+                }
+                v.push(0.0);
+                v
+            })
+            .unwrap_or_else(|| vec![0.0; j]);
+        let prev_outputs = prev_outputs
+            .map(|mut v| {
+                if v.len() >= k {
+                    v.drain(k..);
+                }
+                v
+            })
+            .unwrap_or_else(|| vec![0.0; k]);
+        dbg!(&c_coeffs);
+        dbg!(&d_coeffs);
+        Self {
+            c_coeffs,
+            d_coeffs,
+            prev_inputs,
+            prev_outputs,
+        }
+    }
+
+    fn from_sf(
+        sf: SystemFunction,
+        prev_inputs: Option<Vec<f64>>,
+        prev_outputs: Option<Vec<f64>>,
+    ) -> Self {
+        println!("{sf}");
+        let SystemFunction {
+            numerator,
+            denominator,
+        } = sf;
+        let mut c_coeffs = denominator.coeffs();
+        c_coeffs.pop();
+        c_coeffs.reverse();
+        for coeff in &mut c_coeffs {
+            *coeff *= -1.0;
+        }
+        let mut d_coeffs = numerator.coeffs();
+        d_coeffs.reverse();
+        Self::new(c_coeffs, d_coeffs, prev_inputs, prev_outputs)
+    }
+}
+
+#[track_caller]
+fn dot_product(v1: &[f64], v2: &[f64]) -> f64 {
+    assert_eq!(v1.len(), v2.len());
+    v1.iter().zip(v2.iter()).map(|(v1, v2)| v1 * v2).sum()
+}
+
+impl StateMachine<f64, f64> for LTSIM {
+    type State = (Vec<f64>, Vec<f64>);
+
+    fn start_state(&self) -> Self::State {
+        (self.prev_inputs.clone(), self.prev_outputs.clone())
+    }
+
+    fn next_values(
+        &self,
+        (mut inputs, mut outputs): Self::State,
+        input: Option<f64>,
+    ) -> (Self::State, Option<f64>) {
+        let inputs_len = inputs.len();
+        inputs.rotate_left(inputs_len - 1);
+        unsafe { *inputs.get_unchecked_mut(0) = input.expect("no input") };
+        let mut output = dot_product(&outputs, &self.c_coeffs);
+        output += dot_product(&inputs, &self.d_coeffs);
+
+        let outputs_len = outputs.len();
+        outputs.rotate_left(outputs_len - 1);
+        unsafe { *outputs.get_unchecked_mut(0) = output };
+
+        ((inputs, outputs), Some(output))
+    }
 }
 
 #[cfg(test)]
@@ -148,8 +266,17 @@ mod tests {
 
     use crate::{
         poly::Poly,
-        sf::{Pole, Poles, SystemFunction},
+        sf::{LTSIM, Pole, Poles, SystemFunction},
     };
+
+    impl Pole {
+        fn into_parts(self) -> (f64, f64) {
+            match self {
+                Pole::Real(re) => (re, 0.0),
+                Pole::Complex(re, im) => (re, im),
+            }
+        }
+    }
 
     fn sort_poles(poles: &mut Poles) {
         poles.0.sort_by(|p1, p2| {
@@ -245,5 +372,240 @@ right: {right_val:?}"#
         let poles = s4.poles();
         assert_eq!(poles.len(), 1);
         pole_assert_eq(Pole::Real(0.8), poles[0])
+    }
+
+    const EPSILON: f64 = 1e-10;
+
+    fn assert_vec_approx_eq(actual: &[f64], expected: &[f64], msg: &str) {
+        assert_eq!(actual.len(), expected.len(), "{}: length mismatch", msg);
+        for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (a - e).abs() < EPSILON,
+                "{}: element {} differs: expected {}, got {}",
+                msg,
+                i,
+                e,
+                a
+            );
+        }
+    }
+
+    fn create_ltsim(numerator: Vec<f64>, denominator: Vec<f64>) -> LTSIM {
+        let sf = SystemFunction {
+            numerator: Poly::from_vec(numerator),
+            denominator: Poly::from_vec(denominator),
+        };
+        LTSIM::from_sf(sf, None, None)
+    }
+
+    #[test]
+    fn test_simple_first_order() {
+        let numerator = vec![1.0];
+        let denominator = vec![1.0, 0.5];
+
+        let ltsim = create_ltsim(numerator, denominator);
+
+        let expected_c = vec![-1.0];
+        assert_vec_approx_eq(&ltsim.c_coeffs, &expected_c, "cCoeffs");
+
+        let expected_d = vec![1.0];
+        assert_vec_approx_eq(&ltsim.d_coeffs, &expected_d, "dCoeffs");
+    }
+
+    #[test]
+    fn test_simple_lowpass() {
+        let numerator = vec![0.5, 0.5];
+        let denominator = vec![1.0, -0.5];
+
+        let ltsim = create_ltsim(numerator, denominator);
+
+        let expected_c = vec![-1.0];
+        assert_vec_approx_eq(&ltsim.c_coeffs, &expected_c, "cCoeffs");
+
+        let expected_d = vec![0.5, 0.5];
+        assert_vec_approx_eq(&ltsim.d_coeffs, &expected_d, "dCoeffs");
+    }
+
+    #[test]
+    fn test_second_order_system() {
+        let numerator = vec![1.0, 2.0, 1.0];
+        let denominator = vec![1.0, -0.8, 0.15];
+
+        let ltsim = create_ltsim(numerator, denominator);
+
+        let expected_c = vec![0.8, -1.0];
+        assert_vec_approx_eq(&ltsim.c_coeffs, &expected_c, "cCoeffs");
+
+        let expected_d = vec![1.0, 2.0, 1.0];
+        assert_vec_approx_eq(&ltsim.d_coeffs, &expected_d, "dCoeffs");
+    }
+
+    #[test]
+    fn test_gain_only() {
+        let numerator = vec![2.5];
+        let denominator = vec![1.0];
+
+        let ltsim = create_ltsim(numerator, denominator);
+
+        assert!(ltsim.c_coeffs.is_empty(), "Expected empty cCoeffs");
+
+        let expected_d = vec![2.5];
+        assert_vec_approx_eq(&ltsim.d_coeffs, &expected_d, "dCoeffs");
+    }
+
+    #[test]
+    fn test_integrator() {
+        let numerator = vec![1.0];
+        let denominator = vec![1.0, -1.0];
+
+        let ltsim = create_ltsim(numerator, denominator);
+
+        let expected_c = vec![-1.0];
+        assert_vec_approx_eq(&ltsim.c_coeffs, &expected_c, "cCoeffs");
+
+        let expected_d = vec![1.0];
+        assert_vec_approx_eq(&ltsim.d_coeffs, &expected_d, "dCoeffs");
+    }
+
+    #[test]
+    fn test_differentiator() {
+        // Discrete differentiator: H(z) = (1 - z^-1)
+        let numerator = vec![1.0, -1.0];
+        let denominator = vec![1.0];
+
+        let ltsim = create_ltsim(numerator, denominator);
+
+        assert!(ltsim.c_coeffs.is_empty(), "Expected empty cCoeffs");
+
+        let expected_d = vec![-1.0, 1.0];
+        assert_vec_approx_eq(&ltsim.d_coeffs, &expected_d, "dCoeffs");
+    }
+
+    #[test]
+    fn test_notch_filter() {
+        // Notch filter at Fs/4: H(z) = (1 - z^-2) / (1 - 0.9z^-2)
+        let numerator = vec![1.0, 0.0, -1.0];
+        let denominator = vec![1.0, 0.0, -0.9];
+
+        let ltsim = create_ltsim(numerator, denominator);
+
+        let expected_c = vec![-0.0, -1.0];
+        assert_vec_approx_eq(&ltsim.c_coeffs, &expected_c, "cCoeffs");
+
+        let expected_d = vec![-1.0, 0.0, 1.0];
+        assert_vec_approx_eq(&ltsim.d_coeffs, &expected_d, "dCoeffs");
+    }
+
+    #[test]
+    fn test_highpass_first_order() {
+        let numerator = vec![0.5, -0.5];
+        let denominator = vec![1.0, -0.5];
+
+        let ltsim = create_ltsim(numerator, denominator);
+
+        let expected_c = vec![-1.0];
+        assert_vec_approx_eq(&ltsim.c_coeffs, &expected_c, "cCoeffs");
+
+        let expected_d = vec![-0.5, 0.5];
+        assert_vec_approx_eq(&ltsim.d_coeffs, &expected_d, "dCoeffs");
+    }
+
+    #[test]
+    fn test_resonant_filter() {
+        let numerator = vec![1.0, 0.0, 1.0];
+        let denominator = vec![1.0, 0.5, 0.9];
+
+        let ltsim = create_ltsim(numerator, denominator);
+
+        let expected_c = vec![-0.5, -1.0];
+        assert_vec_approx_eq(&ltsim.c_coeffs, &expected_c, "cCoeffs");
+
+        let expected_d = vec![1.0, 0.0, 1.0];
+        assert_vec_approx_eq(&ltsim.d_coeffs, &expected_d, "dCoeffs");
+    }
+
+    #[test]
+    fn test_third_order_butterworth() {
+        let numerator = vec![0.1, 0.3, 0.3, 0.1];
+        let denominator = vec![1.0, -0.5, 0.3, -0.1];
+
+        let ltsim = create_ltsim(numerator, denominator);
+
+        let expected_c = vec![-0.3, 0.5, -1.0];
+        assert_vec_approx_eq(&ltsim.c_coeffs, &expected_c, "cCoeffs");
+
+        let expected_d = vec![0.1, 0.3, 0.3, 0.1];
+        assert_vec_approx_eq(&ltsim.d_coeffs, &expected_d, "dCoeffs");
+    }
+
+    #[test]
+    fn test_negative_coefficients() {
+        // System with negative coefficients
+        let numerator = vec![-1.0, 2.0, -1.0];
+        let denominator = vec![1.0, 0.5, -0.3];
+
+        let ltsim = create_ltsim(numerator, denominator);
+
+        let expected_c = vec![-0.5, -1.0];
+        assert_vec_approx_eq(&ltsim.c_coeffs, &expected_c, "cCoeffs");
+
+        let expected_d = vec![-1.0, 2.0, -1.0];
+        assert_vec_approx_eq(&ltsim.d_coeffs, &expected_d, "dCoeffs");
+    }
+
+    #[test]
+    fn test_small_coefficients() {
+        let numerator = vec![0.001, 0.002];
+        let denominator = vec![1.0, 0.0001];
+
+        let ltsim = create_ltsim(numerator, denominator);
+
+        let expected_c = vec![-1.0];
+        assert_vec_approx_eq(&ltsim.c_coeffs, &expected_c, "cCoeffs");
+
+        let expected_d = vec![0.002, 0.001];
+        assert_vec_approx_eq(&ltsim.d_coeffs, &expected_d, "dCoeffs");
+    }
+
+    #[test]
+    fn test_normalized_system() {
+        // System with a0 != 1: H(z) = 2 / (2 + z^-1)
+        let numerator = vec![2.0];
+        let denominator = vec![2.0, 1.0];
+
+        let ltsim = create_ltsim(numerator, denominator);
+
+        let expected_c = vec![-2.0];
+        assert_vec_approx_eq(&ltsim.c_coeffs, &expected_c, "cCoeffs");
+
+        let expected_d = vec![2.0];
+        assert_vec_approx_eq(&ltsim.d_coeffs, &expected_d, "dCoeffs");
+    }
+
+    #[test]
+    fn test_fir_filter() {
+        let numerator = vec![0.25, 0.5, 0.5, 0.25];
+        let denominator = vec![1.0];
+
+        let ltsim = create_ltsim(numerator, denominator);
+
+        assert!(ltsim.c_coeffs.is_empty(), "Expected empty cCoeffs");
+
+        let expected_d = vec![0.25, 0.5, 0.5, 0.25];
+        assert_vec_approx_eq(&ltsim.d_coeffs, &expected_d, "dCoeffs");
+    }
+
+    #[test]
+    fn test_high_order_system() {
+        let numerator = vec![0.1, 0.2, 0.3, 0.2, 0.1];
+        let denominator = vec![1.0, -0.5, 0.3, -0.1, 0.05];
+
+        let ltsim = create_ltsim(numerator, denominator);
+
+        let expected_c = vec![0.1, -0.3, 0.5, -1.0];
+        assert_vec_approx_eq(&ltsim.c_coeffs, &expected_c, "cCoeffs");
+
+        let expected_d = vec![0.1, 0.2, 0.3, 0.2, 0.1];
+        assert_vec_approx_eq(&ltsim.d_coeffs, &expected_d, "dCoeffs");
     }
 }

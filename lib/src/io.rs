@@ -1,4 +1,7 @@
-use std::{f64::consts::PI, ops::Sub};
+use std::{
+    f64::consts::PI,
+    ops::{Add, Sub},
+};
 
 use safer_ffi::derive_ReprC;
 
@@ -11,22 +14,55 @@ pub struct Point {
 }
 
 impl Point {
-    pub fn new(x: f64, y: f64) -> Self {
+    pub const fn new(x: f64, y: f64) -> Self {
         Self { x, y }
     }
 
-    pub fn distance(&self, other: Point) -> f64 {
+    pub fn from_polar(d: f64, angle: f64) -> Self {
+        Self {
+            x: d * angle.cos(),
+            y: d * angle.sin(),
+        }
+    }
+
+    pub fn distance_to_orig(&self) -> f64 {
+        self.distance_to(Point::new(0.0, 0.0))
+    }
+
+    pub fn distance_to(&self, other: Point) -> f64 {
         ((self.x - other.x).powi(2) + (self.y - other.y).powi(2)).sqrt()
     }
 
     pub fn is_near(&self, other: Point, epsilon: f64) -> bool {
-        self.distance(other) < epsilon
+        self.distance_to(other) < epsilon
     }
 
     pub fn angle_to(&self, other: Point) -> Angle {
         let dy = other.y - self.y;
         let dx = other.x - self.x;
         Angle::new(dy.atan2(dx))
+    }
+}
+
+impl Add<Point> for Point {
+    type Output = Point;
+
+    fn add(self, rhs: Point) -> Self::Output {
+        Point {
+            x: self.x + rhs.x,
+            y: self.y + rhs.y,
+        }
+    }
+}
+
+impl Sub<Point> for Point {
+    type Output = Point;
+
+    fn sub(self, rhs: Point) -> Self::Output {
+        Point {
+            x: self.x - rhs.x,
+            y: self.y - rhs.y,
+        }
     }
 }
 
@@ -59,6 +95,9 @@ pub struct Action {
 impl Action {
     pub fn foward(fvel: f64) -> Self {
         Self { fvel, rvel: 0.0 }
+    }
+    pub fn rotate(rvel: f64) -> Self {
+        Self { fvel: 0.0, rvel }
     }
 }
 
