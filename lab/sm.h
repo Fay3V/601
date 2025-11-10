@@ -11,8 +11,8 @@ typedef ... SignalOpaque_f64_t;
 
 SignalOpaque_f64_t *
 sig (
-    double init_d,
-    double k,
+    double k3,
+    double k4,
     double desired_d);
 
 SignalOpaque_f64_t *
@@ -28,42 +28,33 @@ sig_sample (
 SignalOpaque_f64_t *
 sig_unit (void);
 
-typedef ... StateFullMachineOpaque_SensorInput_Action_t;
+typedef ... StateFullMachineOpaque_AnglePropInput_Action_t;
 
-StateFullMachineOpaque_SensorInput_Action_t *
+StateFullMachineOpaque_AnglePropInput_Action_t *
 sm (
     double desired_d,
-    double k);
+    double k1,
+    double k2);
 
 bool
 sm_is_done (
-    StateFullMachineOpaque_SensorInput_Action_t * sm);
+    StateFullMachineOpaque_AnglePropInput_Action_t * sm);
 
 void
 sm_reset (
-    StateFullMachineOpaque_SensorInput_Action_t * sm);
+    StateFullMachineOpaque_AnglePropInput_Action_t * sm);
 
-typedef struct {
-    double idx[8];
-} double_8_array_t;
+typedef struct Tuple2_bool_double {
+    bool _0;
 
-typedef struct Point {
-    double x;
+    double _1;
+} Tuple2_bool_double_t;
 
-    double y;
-} Point_t;
+typedef struct AnglePropInput {
+    double distance;
 
-typedef struct Pose {
-    Point_t pos;
-
-    double theta;
-} Pose_t;
-
-typedef struct SensorInput {
-    double_8_array_t sonars;
-
-    Pose_t odometry;
-} SensorInput_t;
+    Tuple2_bool_double_t angle;
+} AnglePropInput_t;
 
 typedef struct Action {
     double fvel;
@@ -73,6 +64,6 @@ typedef struct Action {
 
 Action_t
 sm_step (
-    StateFullMachineOpaque_SensorInput_Action_t * sm,
-    SensorInput_t input);
+    StateFullMachineOpaque_AnglePropInput_Action_t * sm,
+    AnglePropInput_t input);
 

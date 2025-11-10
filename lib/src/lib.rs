@@ -3,9 +3,10 @@ use crate::{
     sf::SystemFunction,
     sig::{Signal, constant},
     sm::{StateFullMachine, StateMachine},
+    sm_course::delay,
     sonars::get_distance_right,
 };
-use safer_ffi::prelude::*;
+use safer_ffi::{option::TaggedOption, prelude::*};
 use std::cell::Cell;
 pub mod io;
 
@@ -13,6 +14,7 @@ pub mod poly;
 
 pub mod sf;
 
+pub mod opt;
 pub mod sig;
 pub mod sm;
 pub mod sm_course;
@@ -31,61 +33,58 @@ where
 const V: f64 = 0.1;
 const T: f64 = 0.1;
 
-fn controller(desired_d: f64, k: f64) -> impl StateMachine<(u32, f64), Action> {
-    (move |(steps, ds): (u32, f64)| (steps, desired_d - ds))
-        .cascade(move |(steps, err)| {
-            eprintln!("err[{}]={err}", steps);
-            (steps, k * err)
-        })
-        .cascade(|(steps, rvel)| {
-            eprintln!("w[{}]={rvel}", steps);
-            Action { fvel: V, rvel }
+fn controller(desired_d: f64, k3: f64, k4: f64) -> impl StateMachine<(f64, Option<f64>), Action> {
+    (move |(ds, angle): (f64, Option<f64>)| angle.map(|angle| k3 * (desired_d - ds) - k4 * angle))
+        .cascade(|rvel: Option<f64>| Action {
+            fvel: V,
+            rvel: rvel.unwrap_or(0.0),
         })
 }
 
-fn sensor() -> impl StateMachine<(u32, SensorInput), (u32, f64)> {
-    |(steps, sensors): (u32, SensorInput)| {
-        let dist = get_distance_right(&sensors.sonars);
-        eprintln!("do[{}]={dist}", steps - 1);
-        eprintln!(
-            "theta[{}]={}",
-            steps - 1,
-            Angle::new(sensors.odometry.theta).0
-        );
-        (steps, dist)
-    }
+fn sensor() -> impl StateMachine<AnglePropInput, (f64, Option<f64>)> {
+    |sonars: AnglePropInput| (sonars.distance, sonars.angle.into_rust())
+}
+
+#[derive_ReprC]
+#[repr(C)]
+#[derive(Debug, Clone)]
+pub struct AnglePropInput {
+    distance: f64,
+    angle: TaggedOption<f64>,
 }
 
 #[ffi_export]
-fn sm(desired_d: f64, k: f64) -> repr_c::Box<StateFullMachineOpaque<SensorInput, Action>> {
-    dbg!((desired_d, k));
-    let steps = Cell::new(0);
+fn sm(
+    desired_d: f64,
+    k1: f64,
+    k2: f64,
+) -> repr_c::Box<StateFullMachineOpaque<AnglePropInput, Action>> {
+    dbg!((desired_d, (k1, k2)));
     Box::new(StateFullMachineOpaque {
         sfm: Box::new(
-            (move |input| {
-                let s = steps.get() + 1;
-                steps.set(s);
-                (s, input)
-            })
-            .cascade(sensor().cascade(controller(desired_d, k)))
-            .into_state_full_machine(),
+            sensor()
+                .cascade(controller(desired_d, k1, k2))
+                .into_state_full_machine(),
         ),
     })
     .into()
 }
 
 #[ffi_export]
-fn sm_step(sm: &'_ mut StateFullMachineOpaque<SensorInput, Action>, input: SensorInput) -> Action {
+fn sm_step(
+    sm: &'_ mut StateFullMachineOpaque<AnglePropInput, Action>,
+    input: AnglePropInput,
+) -> Action {
     sm.sfm.step(Some(input)).unwrap_or_default()
 }
 
 #[ffi_export]
-fn sm_is_done(sm: &'_ mut StateFullMachineOpaque<SensorInput, Action>) -> bool {
+fn sm_is_done(sm: &'_ mut StateFullMachineOpaque<AnglePropInput, Action>) -> bool {
     sm.sfm.is_done()
 }
 
 #[ffi_export]
-fn sm_reset(sm: &'_ mut StateFullMachineOpaque<SensorInput, Action>) {
+fn sm_reset(sm: &'_ mut StateFullMachineOpaque<AnglePropInput, Action>) {
     sm.sfm.reset()
 }
 
@@ -114,39 +113,45 @@ fn sig_cos(omega: f64, theta: f64) -> repr_c::Box<SignalOpaque<f64>> {
     .into()
 }
 
-pub fn wall_follower_model(k: f64, t: f64, v: f64) -> SystemFunction {
-    // let numerator = Poly::new([k * v * t * t, 0.0, 0.0]);
-    // let denominator = Poly::new([1.0 + k * v * t * t, -2.0, 1.0]);
-    // let sf = SystemFunction::new(numerator, denominator);
-    // println!("1: {sf}");
-    // println!("===============================");
+pub fn delay_plus_prop_model(k1: f64, k2: f64) -> SystemFunction {
+    let controller = sf::gain(k1).feedforward_add(Some(sf::gain(k2).cascade(sf::delay())));
 
-    let controller = sf::gain(k);
-    let plant1 = sf::gain(t)
+    let plant1 = sf::gain(T)
         .cascade(sf::delay())
         .cascade(sf::gain(1.0).feedback_add(Some(sf::delay())));
-    let plant2 = sf::gain(v * t)
+    let plant2 = sf::gain(V * T)
         .cascade(sf::delay())
         .cascade(sf::gain(1.0).feedback_add(Some(sf::delay())));
     let sf = controller
         .cascade(plant1)
         .cascade(plant2)
         .feedback_sub(None);
-    // println!("2: {sf}");
+    println!("{sf}");
+    sf
+}
+
+pub fn angle_plus_prop_model(k3: f64, k4: f64) -> SystemFunction {
+    let plant1 = sf::gain(T)
+        .cascade(sf::delay())
+        .cascade(sf::gain(1.0).feedback_add(Some(sf::delay())));
+
+    let plant2 = sf::gain(V * T)
+        .cascade(sf::delay())
+        .cascade(sf::gain(1.0).feedback_add(Some(sf::delay())));
+    let sf = sf::gain(k3)
+        .cascade(plant1.feedback_sub(Some(sf::gain(k4))))
+        .cascade(plant2)
+        .feedback_sub(None);
+    // println!("{sf}");
     sf
 }
 
 #[ffi_export]
-fn sig(init_d: f64, k: f64, desired_d: f64) -> repr_c::Box<SignalOpaque<f64>> {
+fn sig(k3: f64, k4: f64, desired_d: f64) -> repr_c::Box<SignalOpaque<f64>> {
     Box::new(SignalOpaque {
         sig: Box::new(
-            wall_follower_model(k, T, V)
-                .into_sm(
-                    Some(vec![desired_d, desired_d]),
-                    // Some(vec![0.5004870506048704, 0.5031447799628332]),
-                    Some(vec![0.5034640638578065, 0.49970114809773036]),
-                    // Some(vec![0.50, 0.5031447799628332]),
-                )
+            angle_plus_prop_model(k3, k4)
+                .into_sm(Some(vec![desired_d, desired_d]), Some(vec![0.503, 0.499]))
                 .transduce_signal(constant(desired_d)),
         ),
     })

@@ -117,6 +117,22 @@ impl SystemFunction {
             denominator: (d1 * d2) - (n1 * n2),
         }
     }
+
+    pub fn feedforward_add(self, other: Option<SystemFunction>) -> Self {
+        let SystemFunction {
+            numerator: n1,
+            denominator: d1,
+        } = self;
+        let (n2, d2) = match other {
+            Some(other) => (other.numerator, other.denominator),
+            None => (Poly::new([1.0]), Poly::new([1.0])),
+        };
+
+        Self {
+            numerator: n1 * d2.clone() + n2 * d1.clone(),
+            denominator: d1 * d2,
+        }
+    }
 }
 
 impl Display for SystemFunction {
@@ -132,9 +148,9 @@ impl Display for SystemFunction {
 impl SystemFunction {
     #[cfg(feature = "poles")]
     pub fn poles(&self) -> Poles {
-        self.denominator
-            .reciprocal()
-            .roots()
+        let p = self.denominator.reciprocal();
+        // eprintln!("reci {}", DispPoly::<'z'>(&p));
+        p.roots()
             .into_iter()
             .map(Pole::from)
             .collect::<Vec<_>>()
@@ -211,7 +227,6 @@ impl LTSIM {
         prev_inputs: Option<Vec<f64>>,
         prev_outputs: Option<Vec<f64>>,
     ) -> Self {
-        println!("{sf}");
         let SystemFunction {
             numerator,
             denominator,
